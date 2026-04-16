@@ -1,6 +1,6 @@
 # Wingman
 
-Your AI review copilot. Cross-model code review feedback loop that learns from every review and makes itself progressively unnecessary.
+Cross-model code review feedback loop that learns from every review and makes itself progressively unnecessary.
 
 Wingman uses [OpenAI Codex](https://github.com/openai/codex) as a second-opinion reviewer inside [Claude Code](https://claude.ai/code), then feeds findings back into your project's rules and linter config so the same mistakes never recur.
 
