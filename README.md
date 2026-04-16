@@ -10,6 +10,8 @@ The model that writes your code has blind spots — it follows its own patterns 
 
 For example: if Claude Opus writes your code, use Codex (GPT) as the reviewer. If Gemini writes your code, use Claude as the reviewer. The point is **the reviewer is a different model than the writer** — that's where the value comes from.
 
+Wingman ships with [Codex](https://github.com/openai/codex) as the default reviewer. `/review-setup` will install it for you if it's not already present.
+
 ## Install
 
 ```bash
