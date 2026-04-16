@@ -18,22 +18,18 @@ This installs three skills into your Claude Code (and any other supported agent)
 | `review-loop` | `/review-loop` | Review → categorize → fix → encode learned patterns |
 | `review-retro` | `/review-retro` | Weekly retrospective — trends, pruning, automation recs |
 
-## Prerequisites
-
-- [Codex CLI](https://github.com/openai/codex) installed and authenticated
-- [codex-plugin-cc](https://github.com/openai/codex-plugin-cc) installed in Claude Code
-- A git repository
-
 ## Quick start
 
 ```bash
-# 1. Install skills (for Claude Code, Cursor, and 40+ other agents)
-npx skills add ashbrener/wingman
+# 1. Install skills
+npx skills add ashbrener/wingman                    # all supported agents
+npx skills add ashbrener/wingman -a claude-code      # Claude Code only
+npx skills add ashbrener/wingman -a codex            # Codex only
+npx skills add ashbrener/wingman -a gemini           # Gemini CLI only
 
-# 2. Install git hook + .reviews/ + rules file into your project
-bash <(curl -s https://raw.githubusercontent.com/ashbrener/wingman/main/scripts/install.sh)
-# or if you've cloned the repo:
-./scripts/install.sh
+# 2. Run setup — installs git hook, .reviews/, rules file
+#    Also checks for Codex CLI and plugin, installs if missing
+/review-setup
 
 # 3. Work on your feature branch, commit, push
 #    Codex reviews in background after push — you keep working
@@ -45,7 +41,7 @@ bash <(curl -s https://raw.githubusercontent.com/ashbrener/wingman/main/scripts/
 /review-retro
 ```
 
-The install script is idempotent — safe to run multiple times. It detects your hooks directory (`.git-hooks/`, `.githooks/`, `.husky/`, or `.git/hooks/`) and appends to existing pre-push hooks rather than overwriting.
+`/review-setup` is idempotent — safe to run multiple times. It detects your hooks directory (`.git-hooks/`, `.githooks/`, `.husky/`, or `.git/hooks/`) and appends to existing pre-push hooks rather than overwriting.
 
 ## How it works
 
