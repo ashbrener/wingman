@@ -16,45 +16,67 @@ If uncategorized findings exist, use those. If none exist (or `.reviews/` is emp
 - Ask Codex to report: line number, category (lint/logic/architecture/security), severity (critical/high/medium/low), and a one-line description for each finding
 - Save the output to `.reviews/<timestamp>-<branch>.json` in the standard format
 
-## Step 2: Parse, categorize, and present
+## Step 2: Parse, categorize, and present overview
 
 For each uncategorized review file, parse the `raw_review` field and extract individual findings. Categorize each as:
 
-| Category | Description | Action |
-|---|---|---|
-| **lint** | Code style, formatting, naming | Should become a linter rule |
-| **logic** | Correctness, edge cases, bugs | Fix in code + add to learned patterns |
-| **architecture** | Structure, coupling, abstractions | Fix in code + add to learned patterns |
-| **security** | Vulnerabilities, injection, auth | Fix in code + add to learned patterns with [SECURITY] prefix |
+| Category | Description |
+|---|---|
+| **lint** | Code style, formatting, naming |
+| **logic** | Correctness, edge cases, bugs |
+| **architecture** | Structure, coupling, abstractions |
+| **security** | Vulnerabilities, injection, auth |
 
-**Present findings to the user as a numbered table, sorted by file path (alphabetical) then line number within each file:**
+For EACH finding, Claude must also provide its own independent assessment in a "Claude" column:
+- **Agree** — Claude concurs with the finding and severity
+- **Agree, bump severity** — Claude agrees but thinks severity should be higher/lower (explain why)
+- **Disagree** — Claude thinks this is a false positive or not worth fixing (explain why)
+- **Skip** — Not applicable in this context (e.g., test file, intentional pattern)
 
-```
-Wingman Review Findings
-=======================
-
-| #  | File              | Line | Severity | Category     | Finding                                       |
-|----|-------------------|------|----------|--------------|-----------------------------------------------|
-| 1  | hello_world.py    | 10   | high     | security     | Hardcoded API key committed in source          |
-| 2  | hello_world.py    | 22   | high     | security     | SQL injection via f-string interpolation       |
-| 3  | hello_world.py    | 27   | medium   | logic        | No null check — fetchone() may return None     |
-| 4  | hello_world.py    | 109  | critical | security     | eval() executes arbitrary code from CLI input  |
-| 5  | services/auth.py  | 45   | medium   | architecture | God function mixes 5 concerns                 |
-| ...
-
-Summary: 1 critical | 3 high | 4 medium | 2 low
-```
-
-Use relative file paths from the project root. This makes it easy to fix file-by-file and navigate directly to each finding.
-
-## Step 3: Walk through findings
-
-Walk through each finding sequentially, starting with the highest severity. Present each finding using this exact format — no AskUserQuestion widget, just conversational markdown:
+**Present the full overview table sorted by file path (alphabetical) then line number:**
 
 ```markdown
-| # | Severity | Category | File |
-|---|---|---|---|
-| **1/16** | 🔴 CRITICAL | security | `hello_world.py:114` |
+| # | Severity | Category | File | Claude |
+|---|---|---|---|---|
+| **1/16** | 🔴 CRITICAL | security | `hello_world.py:114` | Agree — eval() is never safe on user input |
+| **2/16** | 🟠 HIGH | security | `hello_world.py:22` | Agree — classic SQL injection |
+| **3/16** | 🟠 HIGH | security | `hello_world.py:60` | Agree — same pattern as #2 |
+| ... | ... | ... | ... | ... |
+| **14/16** | 🟡 MEDIUM | architecture | `hello_world.py:34` | Skip — test file, not worth refactoring |
+| **15/16** | 🔵 LOW | lint | `hello_world.py:81` | Agree — ruff catches this (`F841`) |
+```
+
+Severity uses colored emoji: 🔴 CRITICAL, 🟠 HIGH, 🟡 MEDIUM, 🔵 LOW
+
+After the table, show the action bar:
+
+> **all** fix everything · **agreed** fix only where Claude agrees · **one** walk through 1-by-1 · **none** done
+
+## Step 3: Fix findings (based on user choice)
+
+### If "all":
+Spawn a **background Agent** to fix all findings in parallel:
+- The agent receives the full list of findings with file paths, line numbers, descriptions, and proposed fixes
+- It groups fixes by file for efficiency
+- It commits fixes grouped by category:
+  - Security fixes: `fix(review): <description>` with `Wingman-finding: security`
+  - Logic fixes: `fix(review): <description>` with `Wingman-finding: logic`
+  - Architecture fixes: `fix(review): <description>` with `Wingman-finding: architecture`
+  - Lint fixes: detect the project's linter (ruff/eslint/biome), add missing rules, run auto-fix, commit as `chore(lint): add rule for <pattern>`
+- The agent also encodes learned patterns into `.claude/rules/review-patterns.md` (Step 4)
+- The agent updates the review JSON file when done (Step 5)
+- Tell the user: "Background agent is fixing N findings. You can keep working — you'll be notified when it's done."
+
+### If "agreed":
+Same as "all" but only fix findings where Claude's assessment is "Agree" (including "Agree, bump severity"). Skip findings where Claude said "Disagree" or "Skip". Run as background agent.
+
+### If "one":
+Walk through each finding sequentially. Present each finding using this exact format:
+
+```markdown
+| # | Severity | Category | File | Claude |
+|---|---|---|---|---|
+| **1/16** | 🔴 CRITICAL | security | `hello_world.py:114` | Agree — eval() is never safe on user input |
 
 ​```diff
 - result = eval(user_input)
@@ -68,44 +90,36 @@ Walk through each finding sequentially, starting with the highest severity. Pres
 ```
 
 Format rules:
-- Markdown table header row with: #, Severity, Category, File (relative path with line number)
-- Severity uses colored emoji: 🔴 CRITICAL, 🟠 HIGH, 🟡 MEDIUM, 🔵 LOW
+- Single-row markdown table with: #, Severity, Category, File, Claude opinion
 - Diff block showing the proposed change (red for removals, green for additions)
-- Blockquote action bar: `> **y** fix · **n** skip · **all** fix remaining · **stop** done`
+- Blockquote action bar
 - Separator `---` between findings
 - Wait for user reply before proceeding to next finding
 - Do NOT use AskUserQuestion — this is a conversational inline flow
 
-### When user says "y":
+**When user says "y":**
 1. Apply the fix
 2. Briefly confirm what was changed (one line)
 3. Move to the next finding
 
-### When user says "n":
+**When user says "n":**
 1. Mark as skipped
 2. Move to the next finding
 
-### When user says "all":
+**When user says "all":**
 1. Fix the current finding
-2. Spawn a **background Agent** to fix all remaining findings in parallel:
-   - The agent receives the full list of remaining findings with file paths, line numbers, and descriptions
-   - It groups fixes by file for efficiency
-   - It commits fixes grouped by category:
-     - Security fixes: `fix(review): <description>` with `Wingman-finding: security`
-     - Logic fixes: `fix(review): <description>` with `Wingman-finding: logic`
-     - Architecture fixes: `fix(review): <description>` with `Wingman-finding: architecture`
-     - Lint fixes: detect the project's linter (ruff/eslint/biome), add missing rules, run auto-fix, commit as `chore(lint): add rule for <pattern>`
-   - The agent also encodes learned patterns into `.claude/rules/review-patterns.md` (Step 4)
-   - The agent updates the review JSON file when done (Step 5)
+2. Spawn a background Agent to fix all remaining findings (same as "all" above)
 3. Tell the user: "Background agent is fixing N remaining findings. You can keep working — you'll be notified when it's done."
-4. Proceed to summary (the background agent handles encoding and review file updates)
 
-### When user says "stop":
+**When user says "stop":**
 1. Stop the walk-through
 2. Proceed to Step 4 for everything fixed so far
 
+### If "none":
+Skip all fixes. Proceed directly to Step 4 to encode patterns for future prevention.
+
 ### Lint findings:
-When fixing a lint finding (whether individually or in "all" mode):
+When fixing a lint finding (whether individually or in bulk mode):
 1. Detect the project's linter. Check for (in order):
    - `pyproject.toml` with `[tool.ruff]` → ruff
    - `.eslintrc*` or `eslint.config.*` → eslint

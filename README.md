@@ -59,16 +59,54 @@ push
                                     ↓
                         findings saved to .reviews/
                                     ↓
-                    /review-loop presents numbered table
+            /review-loop presents overview table with Claude's opinion
                                     ↓
-              user chooses: fix all | critical only | one-by-one | skip
-                     ↓                              ↓
+              user chooses: all | agreed | one | none
+                     ↓
+          "all"     → background agent fixes everything
+          "agreed"  → background agent fixes only Claude-approved findings
+          "one"     → walk through 1-by-1 with diff preview (y/n/all/stop)
+          "none"    → skip fixes, encode patterns only
+                     ↓
               lint findings                   non-lint findings
                      ↓                              ↓
           add linter rule                  fix in code + encode
           (ruff, eslint, etc.)             in .claude/rules/review-patterns.md
                      ↓                              ↓
               auto-fix applied             pattern learned — won't recur
+```
+
+### The review table
+
+Codex finds the issues. Claude gives a second opinion. You make the call.
+
+```
+| # | Severity | Category | File | Claude |
+|---|---|---|---|---|
+| 1/16 | 🔴 CRITICAL | security | hello_world.py:114 | Agree — eval() is never safe |
+| 2/16 | 🟠 HIGH     | security | hello_world.py:22  | Agree — classic SQL injection |
+| 3/16 | 🟡 MEDIUM   | logic    | hello_world.py:27  | Agree — null check needed |
+| ...  | ...         | ...      | ...                | ...                          |
+
+> all fix everything · agreed fix Claude-approved · one walk through · none done
+```
+
+### The 1-by-1 walk-through
+
+Each finding shows a diff preview. You respond `y`, `n`, `all`, or `stop`.
+
+```
+| # | Severity | Category | File | Claude |
+|---|---|---|---|---|
+| 1/16 | 🔴 CRITICAL | security | hello_world.py:114 | Agree |
+
+- result = eval(user_input)
++ try:
++     result = int(user_input)
++ except ValueError:
++     print("Invalid input"); sys.exit(1)
+
+> y fix · n skip · all fix remaining · stop done
 ```
 
 ## How it improves over time
