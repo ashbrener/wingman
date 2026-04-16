@@ -80,34 +80,32 @@ push
 
 Codex finds the issues. Claude gives a second opinion. You make the call.
 
-```
 | # | Severity | Category | File | Claude |
 |---|---|---|---|---|
-| 1/16 | 🔴 CRITICAL | security | hello_world.py:114 | Agree — eval() is never safe |
-| 2/16 | 🟠 HIGH     | security | hello_world.py:22  | Agree — classic SQL injection |
-| 3/16 | 🟡 MEDIUM   | logic    | hello_world.py:27  | Agree — null check needed |
-| ...  | ...         | ...      | ...                | ...                          |
+| 1/16 | 🔴 CRITICAL | security | `hello_world.py:114` | Agree — eval() is never safe |
+| 2/16 | 🟠 HIGH | security | `hello_world.py:22` | Agree — classic SQL injection |
+| 3/16 | 🟡 MEDIUM | logic | `hello_world.py:27` | Agree — null check needed |
+| ... | ... | ... | ... | ... |
 
-> all fix everything · agreed fix Claude-approved · one walk through · none done
-```
+> **all** fix everything · **agreed** fix Claude-approved · **one** walk through · **none** done
 
 ### The 1-by-1 walk-through
 
 Each finding shows a diff preview. You respond `y`, `n`, `all`, or `stop`.
 
-```
 | # | Severity | Category | File | Claude |
 |---|---|---|---|---|
-| 1/16 | 🔴 CRITICAL | security | hello_world.py:114 | Agree |
+| 1/16 | 🔴 CRITICAL | security | `hello_world.py:114` | Agree |
 
+```diff
 - result = eval(user_input)
 + try:
 +     result = int(user_input)
 + except ValueError:
 +     print("Invalid input"); sys.exit(1)
-
-> y fix · n skip · all fix remaining · stop done
 ```
+
+> **y** fix · **n** skip · **all** fix remaining · **stop** done
 
 ## How it improves over time
 
