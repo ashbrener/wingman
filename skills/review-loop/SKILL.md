@@ -5,19 +5,20 @@ description: Run Codex cross-model review, categorize findings, fix issues, and 
 
 # Wingman: Review Loop
 
-Run the full review feedback loop: review code with Codex, categorize findings, fix issues, and encode learned patterns so they don't recur.
+Run the full review feedback loop: review code with Codex, present findings for user decision, fix issues, and encode learned patterns so they don't recur.
 
 ## Step 1: Gather findings
 
 Check `.reviews/` for files with `"status": "needs_categorization"`.
 
 If uncategorized findings exist, use those. If none exist (or `.reviews/` is empty), run a fresh review:
-- Use `/codex:review` (or `/codex:adversarial-review` if the user requests it) against the base branch
+- Use `/codex:rescue` to request a structured code review of the diff between the current branch and main
+- Ask Codex to report: line number, category (lint/logic/architecture/security), severity (critical/high/medium/low), and a one-line description for each finding
 - Save the output to `.reviews/<timestamp>-<branch>.json` in the standard format
 
-## Step 2: Parse and categorize
+## Step 2: Parse, categorize, and present
 
-For each uncategorized review file, parse the `raw_review` field and extract individual findings. Categorize each finding as one of:
+For each uncategorized review file, parse the `raw_review` field and extract individual findings. Categorize each as:
 
 | Category | Description | Action |
 |---|---|---|
@@ -26,11 +27,37 @@ For each uncategorized review file, parse the `raw_review` field and extract ind
 | **architecture** | Structure, coupling, abstractions | Fix in code + add to learned patterns |
 | **security** | Vulnerabilities, injection, auth | Fix in code + add to learned patterns with [SECURITY] prefix |
 
-## Step 3: Fix issues
+**Present findings to the user as a numbered table, sorted by severity:**
 
-For **logic**, **architecture**, and **security** findings:
+```
+Wingman Review Findings
+=======================
+
+| #  | Severity | Category     | Line | Finding                                          |
+|----|----------|--------------|------|--------------------------------------------------|
+| 1  | critical | security     | 109  | eval() executes arbitrary code from CLI input    |
+| 2  | high     | security     | 21   | SQL injection via f-string interpolation         |
+| 3  | high     | security     | 10   | Hardcoded API key in source                      |
+| 4  | medium   | logic        | 26   | No null check — fetchone() may return None       |
+| 5  | medium   | architecture | 33   | God function mixes 5 concerns                    |
+| 6  | low      | lint         | 3    | Unused import: os                                |
+| ...
+```
+
+**Then ask the user how to proceed using AskUserQuestion:**
+
+- **"Fix all"** — Fix every finding automatically (group commits by category)
+- **"Fix critical/high only"** — Fix only critical and high severity findings, skip the rest
+- **"Walk through one by one"** — Present each finding individually, let user approve/skip each fix
+- **"Skip — just encode patterns"** — Don't fix anything, but encode non-lint findings as learned patterns for future prevention
+
+## Step 3: Fix issues (based on user choice)
+
+### If "Fix all" or "Fix critical/high only":
+
+For **logic**, **architecture**, and **security** findings (filtered by severity if applicable):
 1. Fix each issue in the working branch
-2. Commit each fix (or group related fixes) using the format:
+2. Group related fixes into commits using the format:
    ```
    fix(review): <description>
 
@@ -52,9 +79,20 @@ For **lint** findings:
    chore(lint): add rule for <pattern>
    ```
 
+### If "Walk through one by one":
+
+For each finding in order:
+1. Show the finding with the relevant code snippet
+2. Ask the user: **"Fix"**, **"Skip"**, or **"Stop here"**
+3. If "Fix" — apply the fix and continue to the next
+4. If "Skip" — mark as skipped and continue
+5. If "Stop here" — stop the walk-through, proceed to encoding patterns for everything fixed so far
+
+After each fix, briefly confirm what was changed (one line, no verbose summaries).
+
 ## Step 4: Encode learned patterns
 
-For non-lint findings, add new entries to `.claude/rules/review-patterns.md` under the appropriate section (Logic Rules, Architecture Rules, or Security Rules).
+For non-lint findings that were fixed (not skipped), add new entries to `.claude/rules/review-patterns.md` under the appropriate section (Logic Rules, Architecture Rules, or Security Rules).
 
 Each pattern entry should be a single clear sentence that Claude Code can follow. Include enough context to apply the rule but keep it concise. Example:
 
@@ -78,19 +116,36 @@ For each processed review file:
    ```json
    {
      "category": "logic",
+     "severity": "medium",
      "description": "Missing null check on lead.metadata",
      "resolution": "Added guard clause in process_lead()",
+     "status": "fixed",
      "commit": "abc1234"
    }
    ```
-2. Set `status` to `"categorized"`
+2. For skipped findings, set `"status": "skipped"`
+3. Set the file's `status` to `"categorized"`
 
 ## Step 6: Summary
 
 Print a summary:
-- Total findings processed
-- Breakdown by category (lint / logic / architecture / security)
-- New linter rules added
-- New patterns added to `.claude/rules/review-patterns.md`
-- Any patterns archived due to cap
-- Files modified
+
+```
+Wingman Review Summary
+======================
+Total findings: N
+  - Critical: N | High: N | Medium: N | Low: N
+
+Fixed: N
+  - Security: N | Logic: N | Architecture: N | Lint: N
+Skipped: N
+
+New linter rules added: N
+New patterns encoded: N (of 30 max)
+Patterns archived: N
+
+Commits created:
+  - abc1234 fix(review): ...
+  - def5678 chore(lint): ...
+  - ghi9012 docs(review): ...
+```

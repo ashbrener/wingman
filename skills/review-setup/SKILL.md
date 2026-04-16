@@ -20,21 +20,21 @@ If any prerequisite is missing, inform the user and provide installation instruc
 
 ## What to install
 
-### 1. Post-commit git hook
+### 1. Pre-push git hook
 
 Detect the project's git hooks directory:
 - Check `git config core.hooksPath` first
 - Look for `.git-hooks/`, `.githooks/`, or `.husky/` directories
 - Fall back to `.git/hooks/`
 
-If a `post-commit` hook already exists, append the Wingman section wrapped in clearly marked comments. Do not overwrite existing hook content.
+If a `pre-push` hook already exists, append the Wingman section wrapped in clearly marked comments. Do not overwrite existing hook content.
 
-Create or append to the post-commit hook:
+Append to the pre-push hook:
 
 ```bash
 # --- Wingman: Codex review (non-blocking) ---
-# Runs codex review in background after every commit on feature branches.
-# Findings saved to .reviews/ for later analysis via /review:loop
+# Runs codex review in background after push on feature branches.
+# Push proceeds immediately — findings saved to .reviews/ for /review-loop.
 
 WINGMAN_BRANCH=$(git rev-parse --abbrev-ref HEAD)
 WINGMAN_TIMESTAMP=$(date +%Y-%m-%d-%H%M%S)
@@ -45,7 +45,7 @@ WINGMAN_REVIEW_FILE="${WINGMAN_REVIEW_DIR}/${WINGMAN_TIMESTAMP}-${WINGMAN_BRANCH
 if [[ "$WINGMAN_BRANCH" != "main" && "$WINGMAN_BRANCH" != "master" && "$WINGMAN_BRANCH" != "develop" ]]; then
     mkdir -p "$WINGMAN_REVIEW_DIR"
 
-    # Run in background — commit returns immediately
+    # Run in background — push proceeds immediately
     (
         REVIEW_OUTPUT=$(codex review --base main 2>&1) || true
 
@@ -100,9 +100,13 @@ Create `.claude/rules/review-patterns.md` if it doesn't exist:
 <!-- Security-sensitive patterns — Claude Code must follow these -->
 ```
 
-### 4. Summary
+### 4. Migration from post-commit
+
+If a post-commit hook exists with the Wingman marker (`# --- Wingman:`), inform the user that Wingman has moved to pre-push and offer to remove the old block.
+
+### 5. Summary
 
 After setup, print:
 - What was installed and where
 - Remind the user to commit the hook and rules file
-- Suggest running `/review:loop` after their next task
+- Suggest: "Push your branch, then run `/review-loop` to process findings before opening a PR"

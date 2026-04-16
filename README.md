@@ -35,23 +35,33 @@ bash <(curl -s https://raw.githubusercontent.com/ashbrener/wingman/main/scripts/
 # or if you've cloned the repo:
 ./scripts/install.sh
 
-# 3. After completing a task, run the review loop
+# 3. Work on your feature branch, commit, push
+#    Codex reviews in background after push — you keep working
+
+# 4. Before opening a PR, process findings
 /review-loop
 
-# 4. Weekly, run a retrospective
+# 5. Weekly, run a retrospective
 /review-retro
 ```
 
-The install script is idempotent — safe to run multiple times. It detects your hooks directory (`.git-hooks/`, `.githooks/`, `.husky/`, or `.git/hooks/`) and appends to existing hooks rather than overwriting.
+The install script is idempotent — safe to run multiple times. It detects your hooks directory (`.git-hooks/`, `.githooks/`, `.husky/`, or `.git/hooks/`) and appends to existing pre-push hooks rather than overwriting.
 
 ## How it works
 
 ```
-commit → post-commit hook runs Codex review in background
+commit (x many)
+  → pre-commit: linter (ruff/eslint) + fast checks [blocking]
+
+push
+  → pre-push: tests [blocking] + Codex review [background, non-blocking]
+  → push proceeds, you keep working
                                     ↓
                         findings saved to .reviews/
                                     ↓
-            /review-loop categorizes: lint | logic | architecture | security
+                    /review-loop presents numbered table
+                                    ↓
+              user chooses: fix all | critical only | one-by-one | skip
                      ↓                              ↓
               lint findings                   non-lint findings
                      ↓                              ↓
@@ -85,7 +95,7 @@ your-project/
 ├── .reviews/                          # Review data (gitignored)
 │   ├── 2026-04-15-120000-feature-auth.json
 │   └── ...
-└── .git-hooks/post-commit             # (or wherever your hooks live)
+└── .git-hooks/pre-push                # Wingman block appended (or wherever your hooks live)
 ```
 
 ## Stack-agnostic
