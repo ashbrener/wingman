@@ -7,7 +7,7 @@ Wingman uses [OpenAI Codex](https://github.com/openai/codex) as a second-opinion
 ## Install
 
 ```bash
-npx skills add starlogik/wingman
+npx skills add ashbrener/wingman
 ```
 
 This installs three skills into your Claude Code (and any other supported agent):
