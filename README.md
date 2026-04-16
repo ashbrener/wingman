@@ -4,6 +4,12 @@ Cross-model code review feedback loop that learns from every review and makes it
 
 Wingman gets a second opinion on your code from a different AI model, then feeds findings back into your project's rules and linter config so the same mistakes never recur.
 
+## Why cross-model?
+
+The model that writes your code has blind spots — it follows its own patterns and won't catch its own mistakes. A different model reviews from first principles, catching things the first model would never flag on itself.
+
+For example: if Claude Opus writes your code, use Codex (GPT) as the reviewer. If Gemini writes your code, use Claude as the reviewer. The point is **the reviewer is a different model than the writer** — that's where the value comes from.
+
 ## Install
 
 ```bash
