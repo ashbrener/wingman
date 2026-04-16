@@ -27,45 +27,68 @@ For each uncategorized review file, parse the `raw_review` field and extract ind
 | **architecture** | Structure, coupling, abstractions | Fix in code + add to learned patterns |
 | **security** | Vulnerabilities, injection, auth | Fix in code + add to learned patterns with [SECURITY] prefix |
 
-**Present findings to the user as a numbered table, sorted by severity:**
+**Present findings to the user as a numbered table, sorted by file path (alphabetical) then line number within each file:**
 
 ```
 Wingman Review Findings
 =======================
 
-| #  | Severity | Category     | Line | Finding                                          |
-|----|----------|--------------|------|--------------------------------------------------|
-| 1  | critical | security     | 109  | eval() executes arbitrary code from CLI input    |
-| 2  | high     | security     | 21   | SQL injection via f-string interpolation         |
-| 3  | high     | security     | 10   | Hardcoded API key in source                      |
-| 4  | medium   | logic        | 26   | No null check — fetchone() may return None       |
-| 5  | medium   | architecture | 33   | God function mixes 5 concerns                    |
-| 6  | low      | lint         | 3    | Unused import: os                                |
+| #  | File              | Line | Severity | Category     | Finding                                       |
+|----|-------------------|------|----------|--------------|-----------------------------------------------|
+| 1  | hello_world.py    | 10   | high     | security     | Hardcoded API key committed in source          |
+| 2  | hello_world.py    | 22   | high     | security     | SQL injection via f-string interpolation       |
+| 3  | hello_world.py    | 27   | medium   | logic        | No null check — fetchone() may return None     |
+| 4  | hello_world.py    | 109  | critical | security     | eval() executes arbitrary code from CLI input  |
+| 5  | services/auth.py  | 45   | medium   | architecture | God function mixes 5 concerns                 |
 | ...
+
+Summary: 1 critical | 3 high | 4 medium | 2 low
 ```
 
-**Then ask the user how to proceed using AskUserQuestion:**
+Use relative file paths from the project root. This makes it easy to fix file-by-file and navigate directly to each finding.
 
-- **"Fix all"** — Fix every finding automatically (group commits by category)
-- **"Fix critical/high only"** — Fix only critical and high severity findings, skip the rest
-- **"Walk through one by one"** — Present each finding individually, let user approve/skip each fix
-- **"Skip — just encode patterns"** — Don't fix anything, but encode non-lint findings as learned patterns for future prevention
+## Step 3: Walk through findings
 
-## Step 3: Fix issues (based on user choice)
+Walk through each finding sequentially, starting with the highest severity. For each finding:
 
-### If "Fix all" or "Fix critical/high only":
+1. **Show the finding** with the relevant code snippet (read the file, show ~5 lines of context around the finding line)
+2. **Show the proposed fix** — briefly describe what you would change
+3. **Ask the user** using AskUserQuestion with these options:
+   - **"y"** — Fix this one and continue to the next
+   - **"n"** — Skip this one and continue to the next
+   - **"all"** — Fix this one AND all remaining findings automatically
+   - **"stop"** — Stop here, proceed to encoding patterns for everything fixed so far
 
-For **logic**, **architecture**, and **security** findings (filtered by severity if applicable):
-1. Fix each issue in the working branch
-2. Group related fixes into commits using the format:
-   ```
-   fix(review): <description>
+### When user says "y":
+1. Apply the fix
+2. Briefly confirm what was changed (one line)
+3. Move to the next finding
 
-   Wingman-finding: <category>
-   Resolution: <what was changed>
-   ```
+### When user says "n":
+1. Mark as skipped
+2. Move to the next finding
 
-For **lint** findings:
+### When user says "all":
+1. Fix the current finding
+2. Spawn a **background Agent** to fix all remaining findings in parallel:
+   - The agent receives the full list of remaining findings with file paths, line numbers, and descriptions
+   - It groups fixes by file for efficiency
+   - It commits fixes grouped by category:
+     - Security fixes: `fix(review): <description>` with `Wingman-finding: security`
+     - Logic fixes: `fix(review): <description>` with `Wingman-finding: logic`
+     - Architecture fixes: `fix(review): <description>` with `Wingman-finding: architecture`
+     - Lint fixes: detect the project's linter (ruff/eslint/biome), add missing rules, run auto-fix, commit as `chore(lint): add rule for <pattern>`
+   - The agent also encodes learned patterns into `.claude/rules/review-patterns.md` (Step 4)
+   - The agent updates the review JSON file when done (Step 5)
+3. Tell the user: "Background agent is fixing N remaining findings. You can keep working — you'll be notified when it's done."
+4. Proceed to summary (the background agent handles encoding and review file updates)
+
+### When user says "stop":
+1. Stop the walk-through
+2. Proceed to Step 4 for everything fixed so far
+
+### Lint findings:
+When fixing a lint finding (whether individually or in "all" mode):
 1. Detect the project's linter. Check for (in order):
    - `pyproject.toml` with `[tool.ruff]` → ruff
    - `.eslintrc*` or `eslint.config.*` → eslint
@@ -74,21 +97,7 @@ For **lint** findings:
 2. Check if an existing rule already covers the finding
 3. If no rule exists, add the appropriate rule to the linter config
 4. Run the linter with auto-fix to apply the new rule
-5. Commit separately:
-   ```
-   chore(lint): add rule for <pattern>
-   ```
-
-### If "Walk through one by one":
-
-For each finding in order:
-1. Show the finding with the relevant code snippet
-2. Ask the user: **"Fix"**, **"Skip"**, or **"Stop here"**
-3. If "Fix" — apply the fix and continue to the next
-4. If "Skip" — mark as skipped and continue
-5. If "Stop here" — stop the walk-through, proceed to encoding patterns for everything fixed so far
-
-After each fix, briefly confirm what was changed (one line, no verbose summaries).
+5. Commit separately: `chore(lint): add rule for <pattern>`
 
 ## Step 4: Encode learned patterns
 
@@ -115,6 +124,8 @@ For each processed review file:
 1. Populate the `findings` array with structured entries:
    ```json
    {
+     "file": "campaigns/services/lead_service.py",
+     "line": 42,
      "category": "logic",
      "severity": "medium",
      "description": "Missing null check on lead.metadata",
