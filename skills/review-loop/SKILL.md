@@ -49,15 +49,20 @@ Use relative file paths from the project root. This makes it easy to fix file-by
 
 ## Step 3: Walk through findings
 
-Walk through each finding sequentially, starting with the highest severity. For each finding:
+Walk through each finding sequentially, starting with the highest severity. Present each finding as a compact inline block — no AskUserQuestion widget, just conversational markdown:
 
-1. **Show the finding** with the relevant code snippet (read the file, show ~5 lines of context around the finding line)
-2. **Show the proposed fix** — briefly describe what you would change
-3. **Ask the user** using AskUserQuestion with these options:
-   - **"y"** — Fix this one and continue to the next
-   - **"n"** — Skip this one and continue to the next
-   - **"all"** — Fix this one AND all remaining findings automatically
-   - **"stop"** — Stop here, proceed to encoding patterns for everything fixed so far
+```
+**#1** critical | security | `hello_world.py:114`
+`eval(user_input)` → replace with `int()` + try/except
+**y** / n / all / stop?
+```
+
+Format rules:
+- One finding per block: number, severity, category, file:line on first line
+- Second line: the issue + proposed fix in one sentence
+- Third line: options (bold the recommended default)
+- Show 3-5 lines of the actual code ONLY if the fix is non-obvious
+- Wait for user reply before proceeding to next finding
 
 ### When user says "y":
 1. Apply the fix
