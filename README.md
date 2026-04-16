@@ -27,11 +27,13 @@ This installs three skills into your Claude Code (and any other supported agent)
 ## Quick start
 
 ```bash
-# 1. Install Wingman
-npx skills add starlogik/wingman
+# 1. Install skills (for Claude Code, Cursor, and 40+ other agents)
+npx skills add ashbrener/wingman
 
-# 2. In Claude Code, set up your project
-/review-setup
+# 2. Install git hook + .reviews/ + rules file into your project
+bash <(curl -s https://raw.githubusercontent.com/ashbrener/wingman/main/scripts/install.sh)
+# or if you've cloned the repo:
+./scripts/install.sh
 
 # 3. After completing a task, run the review loop
 /review-loop
@@ -39,6 +41,8 @@ npx skills add starlogik/wingman
 # 4. Weekly, run a retrospective
 /review-retro
 ```
+
+The install script is idempotent — safe to run multiple times. It detects your hooks directory (`.git-hooks/`, `.githooks/`, `.husky/`, or `.git/hooks/`) and appends to existing hooks rather than overwriting.
 
 ## How it works
 
