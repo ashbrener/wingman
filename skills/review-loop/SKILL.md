@@ -49,20 +49,32 @@ Use relative file paths from the project root. This makes it easy to fix file-by
 
 ## Step 3: Walk through findings
 
-Walk through each finding sequentially, starting with the highest severity. Present each finding as a compact inline block — no AskUserQuestion widget, just conversational markdown:
+Walk through each finding sequentially, starting with the highest severity. Present each finding using this exact format — no AskUserQuestion widget, just conversational markdown:
 
-```
-**#1** critical | security | `hello_world.py:114`
-`eval(user_input)` → replace with `int()` + try/except
-**y** / n / all / stop?
+```markdown
+| # | Severity | Category | File |
+|---|---|---|---|
+| **1/16** | 🔴 CRITICAL | security | `hello_world.py:114` |
+
+​```diff
+- result = eval(user_input)
++ try:
++     result = int(user_input)
++ except ValueError:
++     print("Invalid input"); sys.exit(1)
+​```
+
+> **y** fix · **n** skip · **all** fix remaining · **stop** done
 ```
 
 Format rules:
-- One finding per block: number, severity, category, file:line on first line
-- Second line: the issue + proposed fix in one sentence
-- Third line: options (bold the recommended default)
-- Show 3-5 lines of the actual code ONLY if the fix is non-obvious
+- Markdown table header row with: #, Severity, Category, File (relative path with line number)
+- Severity uses colored emoji: 🔴 CRITICAL, 🟠 HIGH, 🟡 MEDIUM, 🔵 LOW
+- Diff block showing the proposed change (red for removals, green for additions)
+- Blockquote action bar: `> **y** fix · **n** skip · **all** fix remaining · **stop** done`
+- Separator `---` between findings
 - Wait for user reply before proceeding to next finding
+- Do NOT use AskUserQuestion — this is a conversational inline flow
 
 ### When user says "y":
 1. Apply the fix
