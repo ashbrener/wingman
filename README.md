@@ -2,7 +2,7 @@
 
 Cross-model code review feedback loop that learns from every review and makes itself progressively unnecessary.
 
-Wingman uses [OpenAI Codex](https://github.com/openai/codex) as a second-opinion reviewer inside [Claude Code](https://claude.ai/code), then feeds findings back into your project's rules and linter config so the same mistakes never recur.
+Wingman gets a second opinion on your code from a different AI model, then feeds findings back into your project's rules and linter config so the same mistakes never recur.
 
 ## Install
 
@@ -10,7 +10,7 @@ Wingman uses [OpenAI Codex](https://github.com/openai/codex) as a second-opinion
 npx skills add ashbrener/wingman
 ```
 
-This installs three skills into your Claude Code (and any other supported agent):
+This installs three skills into your AI coding agent:
 
 | Skill | Command | Purpose |
 |---|---|---|
@@ -26,11 +26,11 @@ npx skills add ashbrener/wingman                # all agents
 npx skills add ashbrener/wingman -a <agent>     # specific agent only
 
 # 2. Run setup — installs git hook, .reviews/, rules file
-#    Also checks for Codex CLI and plugin, installs if missing
+#    Checks for reviewer CLI and installs if missing
 /review-setup
 
 # 3. Work on your feature branch, commit, push
-#    Codex reviews in background after push — you keep working
+#    Cross-model review runs in background after push — you keep working
 
 # 4. Before opening a PR, process findings
 /review-loop
@@ -48,17 +48,17 @@ commit (x many)
   → pre-commit: linter (ruff/eslint) + fast checks [blocking]
 
 push
-  → pre-push: tests [blocking] + Codex review [background, non-blocking]
+  → pre-push: tests [blocking] + cross-model review [background, non-blocking]
   → push proceeds, you keep working
                                     ↓
                         findings saved to .reviews/
                                     ↓
-            /review-loop presents overview table with Claude's opinion
+            /review-loop presents overview table with your agent's opinion
                                     ↓
               user chooses: all | agreed | one | none
                      ↓
           "all"     → background agent fixes everything
-          "agreed"  → background agent fixes only Claude-approved findings
+          "agreed"  → background agent fixes only agent-approved findings
           "one"     → walk through 1-by-1 with diff preview (y/n/all/stop)
           "none"    → skip fixes, encode patterns only
                      ↓
@@ -72,22 +72,22 @@ push
 
 ### The review table
 
-Codex finds the issues. Claude gives a second opinion. You make the call.
+A different model reviews your code. Your agent gives a second opinion. You make the call.
 
-| # | Severity | Category | File | Claude |
+| # | Severity | Category | File | Opinion |
 |---|---|---|---|---|
 | 1/16 | 🔴 CRITICAL | security | `hello_world.py:114` | Agree — eval() is never safe |
 | 2/16 | 🟠 HIGH | security | `hello_world.py:22` | Agree — classic SQL injection |
 | 3/16 | 🟡 MEDIUM | logic | `hello_world.py:27` | Agree — null check needed |
 | ... | ... | ... | ... | ... |
 
-> **all** fix everything · **agreed** fix Claude-approved · **one** walk through · **none** done
+> **all** fix everything · **agreed** fix agent-approved · **one** walk through · **none** done
 
 ### The 1-by-1 walk-through
 
 Each finding shows a diff preview. You respond `y`, `n`, `all`, or `stop`.
 
-| # | Severity | Category | File | Claude |
+| # | Severity | Category | File | Opinion |
 |---|---|---|---|---|
 | 1/16 | 🔴 CRITICAL | security | `hello_world.py:114` | Agree |
 
@@ -104,13 +104,13 @@ Each finding shows a diff preview. You respond `y`, `n`, `all`, or `stop`.
 ## How it improves over time
 
 ```
-Week 1:  Codex flags ~15 issues per review
+Week 1:  Reviewer flags ~15 issues per review
          → 8 become linter rules, 5 become learned patterns
 
-Week 2:  Codex flags ~7 issues
+Week 2:  Reviewer flags ~7 issues
          → Agent already avoids the encoded patterns
 
-Week 4:  Codex flags 2-3 issues
+Week 4:  Reviewer flags 2-3 issues
          → Mostly novel edge cases
 
 Week 8:  Reviews are near-empty
@@ -121,7 +121,7 @@ Week 8:  Reviews are near-empty
 
 ```
 your-project/
-├── .claude/rules/review-patterns.md   # Learned patterns (auto-loaded by Claude Code)
+├── .claude/rules/review-patterns.md   # Learned patterns (auto-loaded by agent)
 ├── .reviews/                          # Review data (gitignored)
 │   ├── 2026-04-15-120000-feature-auth.json
 │   └── ...
