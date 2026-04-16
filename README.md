@@ -21,11 +21,9 @@ This installs three skills into your Claude Code (and any other supported agent)
 ## Quick start
 
 ```bash
-# 1. Install skills
-npx skills add ashbrener/wingman                    # all supported agents
-npx skills add ashbrener/wingman -a claude-code      # Claude Code only
-npx skills add ashbrener/wingman -a codex            # Codex only
-npx skills add ashbrener/wingman -a gemini           # Gemini CLI only
+# 1. Install skills (supports 45+ AI coding agents)
+npx skills add ashbrener/wingman                # all agents
+npx skills add ashbrener/wingman -a <agent>     # specific agent only
 
 # 2. Run setup — installs git hook, .reviews/, rules file
 #    Also checks for Codex CLI and plugin, installs if missing
