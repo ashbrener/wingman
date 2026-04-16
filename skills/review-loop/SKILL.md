@@ -33,20 +33,27 @@ For EACH finding, Claude must also provide its own independent assessment in a "
 - **Disagree** — Claude thinks this is a false positive or not worth fixing (explain why)
 - **Skip** — Not applicable in this context (e.g., test file, intentional pattern)
 
-**Present the full overview table sorted by file path (alphabetical) then line number:**
+**Present the full overview table sorted by file path (alphabetical) then line number.**
+
+Table formatting rules:
+- Use zero-padded finding numbers: `01/16`, `02/16`, etc.
+- Severity uses colored emoji: 🔴 CRITICAL, 🟠 HIGH, 🟡 MEDIUM, 🔵 LOW
+- Pad header cells with centered text between bullets: `· Header ·`
+- File and Claude columns must be wide — pad headers with spaces to set minimum column width
+- Keep Claude opinions concise but informative (~40-50 chars)
+
+Example:
 
 ```markdown
-| # | Severity | Category | File | Claude |
-|---|---|---|---|---|
-| **1/16** | 🔴 CRITICAL | security | `hello_world.py:114` | Agree — eval() is never safe on user input |
-| **2/16** | 🟠 HIGH | security | `hello_world.py:22` | Agree — classic SQL injection |
-| **3/16** | 🟠 HIGH | security | `hello_world.py:60` | Agree — same pattern as #2 |
-| ... | ... | ... | ... | ... |
-| **14/16** | 🟡 MEDIUM | architecture | `hello_world.py:34` | Skip — test file, not worth refactoring |
-| **15/16** | 🔵 LOW | lint | `hello_world.py:81` | Agree — ruff catches this (`F841`) |
+| · # · | · Severity ·   | · Category · | ·                    File                    · | ·                              Claude                              · |
+|-------|----------------|--------------|------------------------------------------------|--------------------------------------------------------------------|
+| 01/16 | 🔴 CRITICAL    | security     | `hello_world.py:114`                           | Agree — eval() is never safe on user input                         |
+| 02/16 | 🟠 HIGH        | security     | `hello_world.py:22`                            | Agree — classic SQL injection                                      |
+| 03/16 | 🟠 HIGH        | security     | `hello_world.py:60`                            | Agree — same pattern as #2                                         |
+| ...   | ...            | ...          | ...                                            | ...                                                                |
+| 14/16 | 🟡 MEDIUM      | architecture | `hello_world.py:34`                            | Disagree — test file, refactoring adds no value                    |
+| 15/16 | 🔵 LOW         | lint         | `hello_world.py:81`                            | Agree — ruff already catches this with F841                        |
 ```
-
-Severity uses colored emoji: 🔴 CRITICAL, 🟠 HIGH, 🟡 MEDIUM, 🔵 LOW
 
 After the table, show the action bar:
 
@@ -73,10 +80,12 @@ Same as "all" but only fix findings where Claude's assessment is "Agree" (includ
 ### If "one":
 Walk through each finding sequentially. Present each finding using this exact format:
 
+Example:
+
 ```markdown
-| # | Severity | Category | File | Claude |
-|---|---|---|---|---|
-| **1/16** | 🔴 CRITICAL | security | `hello_world.py:114` | Agree — eval() is never safe on user input |
+| · # · | · Severity ·   | · Category · | ·                    File                    · | ·                              Claude                              · |
+|-------|----------------|--------------|------------------------------------------------|--------------------------------------------------------------------|
+| 01/16 | 🔴 CRITICAL    | security     | `hello_world.py:114`                           | Agree — eval() is never safe on user input                         |
 
 ​```diff
 - result = eval(user_input)
@@ -90,7 +99,7 @@ Walk through each finding sequentially. Present each finding using this exact fo
 ```
 
 Format rules:
-- Single-row markdown table with: #, Severity, Category, File, Claude opinion
+- Single-row markdown table using the same padded header format as the overview table
 - Diff block showing the proposed change (red for removals, green for additions)
 - Blockquote action bar
 - Separator `---` between findings
