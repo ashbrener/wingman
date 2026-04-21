@@ -7,6 +7,26 @@ description: Run Codex cross-model review, categorize findings, fix issues, and 
 
 Run the full review feedback loop: review code with Codex, present findings for user decision, fix issues, and encode learned patterns so they don't recur.
 
+## Protocol: auto-surface after push
+
+Whenever the agent runs `git push` in a repo that has Wingman installed
+(detectable by the presence of the `# --- Wingman: Codex review` marker
+in the repo's `pre-push` hook), the review runs in the background and
+finishes ~60-120 seconds later. The agent MUST:
+
+1. Return control to the user immediately after `git push` completes
+   (the hook is non-blocking — don't wait for the review).
+2. Tell the user: *"Pushed. Wingman review running in the background;
+   I'll surface the findings table here when it's ready."*
+3. Schedule a follow-up check (e.g. `ScheduleWakeup(delaySeconds: 120)`)
+   that re-enters this skill.
+4. On wake-up, scan `.reviews/*.json` for the latest file whose `status`
+   is `needs_categorization`; if present, proceed to Step 1 below and
+   render the findings table inline in chat, unprompted.
+
+This makes the review an ambient part of the push flow, not a manual
+step the developer has to remember.
+
 ## Step 1: Gather findings
 
 Check `.reviews/` for files with `"status": "needs_categorization"`.
@@ -57,7 +77,21 @@ Example:
 
 After the table, show the action bar:
 
-> **all** fix everything · **agreed** fix only where Claude agrees · **one** walk through 1-by-1 · **none** done
+> **all** fix everything · **agreed** fix only where Claude agrees · **one** walk through 1-by-1 · **defer** mark non-actionable with rationale · **per-row** e.g. `01:fix 02:defer 03:fix` · **none** done
+
+### Per-row response format
+
+Users may reply with a space-delimited list pairing each finding number
+with an action (`fix`, `defer`, `skip`). Examples:
+
+- `02:fix 03:fix 01:defer` — fix two, defer one
+- `all:fix` — same as the top-level `all`
+- `all:defer` — defer everything (record rationale for each)
+
+When the user defers a finding, **always** prompt once for a one-line
+rationale unless they included it inline (e.g. `01:defer="hifi-aligned"`).
+That rationale lands in the review JSON AND in the rules file (Step 4),
+so future reviews know not to re-flag the same pattern.
 
 ## Step 3: Fix findings (based on user choice)
 
@@ -124,6 +158,22 @@ Format rules:
 1. Stop the walk-through
 2. Proceed to Step 4 for everything fixed so far
 
+### If "defer" (or per-row `defer`):
+Don't modify code. For each deferred finding:
+
+1. Record a one-line rationale from the user (prompt if not given inline).
+2. In the review JSON, set the finding's `resolution: "deferred"` and add
+   `rationale: "<user's reason>"`.
+3. Append a **Deferrals** entry to `.claude/rules/review-patterns.md` under
+   a dedicated `### Known false positives / deferrals` subsection within
+   the appropriate category (Logic / Architecture / Security Rules), so
+   future reviews from the same reviewer model don't re-flag the pattern.
+   Include the commit SHA where the deferred state was recorded.
+
+Deferrals are a first-class resolution — they are NOT "skip". Skip means
+"not applicable to this repo"; defer means "legitimate pattern, but the
+reviewer doesn't have the context to understand why it's correct".
+
 ### If "none":
 Skip all fixes. Proceed directly to Step 4 to encode patterns for future prevention.
 
@@ -174,8 +224,13 @@ For each processed review file:
      "commit": "abc1234"
    }
    ```
-2. For skipped findings, set `"status": "skipped"`
-3. Set the file's `status` to `"categorized"`
+2. For skipped findings, set `"status": "skipped"`.
+3. For deferred findings, set `"status": "deferred"` and include a
+   `"rationale"` field with the user's one-line reason. Also include a
+   `"pattern_rule"` field pointing at the heading in
+   `.claude/rules/review-patterns.md` where the deferral was encoded,
+   so future review passes can cross-reference.
+4. Set the file's `status` to `"categorized"`.
 
 ## Step 6: Summary
 
@@ -189,6 +244,7 @@ Total findings: N
 
 Fixed: N
   - Security: N | Logic: N | Architecture: N | Lint: N
+Deferred: N (with rationale encoded to rules)
 Skipped: N
 
 New linter rules added: N

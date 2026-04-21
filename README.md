@@ -39,8 +39,10 @@ npx skills add ashbrener/wingman -a <agent>     # specific agent only
 
 # 3. Work on your feature branch, commit, push
 #    Cross-model review runs in background after push — you keep working
+#    The agent auto-surfaces the findings table in chat ~60-120s later;
+#    no need to invoke /review-loop manually.
 
-# 4. Before opening a PR, process findings
+# 4. If the agent misses the auto-surface (or you want to re-open findings):
 /review-loop
 
 # 5. Weekly, run a retrospective
@@ -61,13 +63,16 @@ push
                                     ↓
                         findings saved to .reviews/
                                     ↓
-            /review-loop presents overview table with your agent's opinion
+        agent auto-surfaces the findings table in chat after push
+        (no need to type /review-loop manually — it's ambient)
                                     ↓
-              user chooses: all | agreed | one | none
+              user chooses: all | agreed | one | defer | per-row | none
                      ↓
           "all"     → background agent fixes everything
           "agreed"  → background agent fixes only agent-approved findings
           "one"     → walk through 1-by-1 with diff preview (y/n/all/stop)
+          "defer"   → record rationale + encode as known false positive
+          "per-row" → e.g. `01:fix 02:defer 03:fix`
           "none"    → skip fixes, encode patterns only
                      ↓
               lint findings                   non-lint findings
@@ -89,7 +94,7 @@ A different model reviews your code. Your agent gives a second opinion. You make
 | 3/16 | 🟡 MEDIUM | logic | `hello_world.py:27` | Agree — null check needed |
 | ... | ... | ... | ... | ... |
 
-> **all** fix everything · **agreed** fix agent-approved · **one** walk through · **none** done
+> **all** fix everything · **agreed** fix agent-approved · **one** walk through · **defer** record rationale · **per-row** e.g. `01:fix 02:defer` · **none** done
 
 ### The 1-by-1 walk-through
 
