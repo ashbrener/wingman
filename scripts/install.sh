@@ -32,54 +32,33 @@ echo "Hooks directory: $HOOKS_DIR"
 HOOK_FILE="$HOOKS_DIR/pre-push"
 MARKER="# --- Wingman: Codex review (non-blocking) ---"
 
-WINGMAN_BLOCK='# --- Wingman: Codex review (non-blocking) ---
-# Runs codex review in background after push on feature branches.
-# Push proceeds immediately — findings saved to .reviews/ for /review-loop.
+# Single source of truth for the hook block: assets/pre-push.sample.
+# install.sh only orchestrates append/create logic; the hook content
+# itself lives in one canonical file so docs and runtime stay in sync.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+WINGMAN_SAMPLE="$SCRIPT_DIR/../assets/pre-push.sample"
 
-WINGMAN_BRANCH=$(git rev-parse --abbrev-ref HEAD)
-WINGMAN_TIMESTAMP=$(date +%Y-%m-%d-%H%M%S)
-WINGMAN_REVIEW_DIR=".reviews"
-WINGMAN_REVIEW_FILE="${WINGMAN_REVIEW_DIR}/${WINGMAN_TIMESTAMP}-${WINGMAN_BRANCH//\//-}.json"
-
-# Skip main/develop/master branches
-if [[ "$WINGMAN_BRANCH" != "main" && "$WINGMAN_BRANCH" != "master" && "$WINGMAN_BRANCH" != "develop" ]]; then
-    mkdir -p "$WINGMAN_REVIEW_DIR"
-
-    # Run in background — push proceeds immediately
-    (
-        REVIEW_OUTPUT=$(codex review --base main 2>&1) || true
-
-        if [ -z "$REVIEW_OUTPUT" ]; then
-            echo "{\"branch\":\"$WINGMAN_BRANCH\",\"timestamp\":\"$WINGMAN_TIMESTAMP\",\"findings\":[],\"status\":\"clean\"}" > "$WINGMAN_REVIEW_FILE"
-        else
-            cat > "$WINGMAN_REVIEW_FILE" <<WINGMAN_EOF
-{
-  "branch": "$WINGMAN_BRANCH",
-  "timestamp": "$WINGMAN_TIMESTAMP",
-  "raw_review": $(echo "$REVIEW_OUTPUT" | python3 -c "import sys,json; print(json.dumps(sys.stdin.read()))"),
-  "findings": [],
-  "resolutions": [],
-  "status": "needs_categorization"
-}
-WINGMAN_EOF
-        fi
-    ) &
+if [ ! -f "$WINGMAN_SAMPLE" ]; then
+    echo "Error: canonical hook block not found at $WINGMAN_SAMPLE" >&2
+    echo "       Reinstall the wingman pack: npx skills add ashbrener/wingman" >&2
+    exit 1
 fi
-# --- End Wingman ---'
 
 if [ -f "$HOOK_FILE" ]; then
     if grep -q "$MARKER" "$HOOK_FILE"; then
         echo "Pre-push hook: Wingman block already present — skipping."
     else
-        echo "" >> "$HOOK_FILE"
-        echo "$WINGMAN_BLOCK" >> "$HOOK_FILE"
+        printf "\n" >> "$HOOK_FILE"
+        cat "$WINGMAN_SAMPLE" >> "$HOOK_FILE"
         echo "Pre-push hook: Appended Wingman block to existing hook."
     fi
 else
     mkdir -p "$(dirname "$HOOK_FILE")"
-    echo "#!/bin/bash" > "$HOOK_FILE"
-    echo "" >> "$HOOK_FILE"
-    echo "$WINGMAN_BLOCK" >> "$HOOK_FILE"
+    {
+        echo "#!/bin/bash"
+        echo ""
+        cat "$WINGMAN_SAMPLE"
+    } > "$HOOK_FILE"
     echo "Pre-push hook: Created $HOOK_FILE"
 fi
 

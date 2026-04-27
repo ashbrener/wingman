@@ -51,6 +51,65 @@ npx skills add ashbrener/wingman -a <agent>     # specific agent only
 
 `/review-setup` is idempotent — safe to run multiple times. It detects your hooks directory (`.git-hooks/`, `.githooks/`, `.husky/`, or `.git/hooks/`) and appends to existing pre-push hooks rather than overwriting.
 
+## Configuration
+
+The pre-push hook honors two optional environment variables. Both have sensible defaults.
+
+| Var | Default | Effect |
+|---|---|---|
+| `WINGMAN_BASE` | `main` | Git base used for the review diff. Set to a feature-branch fix-commit SHA to review only the round-N delta — much faster than re-reviewing the whole branch each round. |
+| `WINGMAN_MODEL` | _(unset)_ — codex CLI's own latest | Pin a specific codex model (e.g. `gpt-5.5`). Leave unset for always-latest behavior; codex picks whichever model its CLI version supports. |
+
+Examples:
+
+```bash
+# Faster iteration during a review-fix loop: review only the latest commit
+WINGMAN_BASE=$(git rev-parse HEAD~1) git push
+
+# Cost-tier control: pin to a smaller model
+WINGMAN_MODEL=gpt-5.4 git push
+```
+
+### Pre-push sync reviews
+
+The hook is always async — push proceeds immediately. When you want a sync review on a material change (the agent workflow), run codex manually before push:
+
+```bash
+codex review --base HEAD~1     # block ~60-90s; findings stream to terminal
+# fix findings, repeat until clean
+git push                       # hook fires async behind you (redundant but harmless)
+```
+
+This keeps the hook simple and lets sync vs async be an act-by-act choice rather than a global config knob.
+
+## Output schema (`wingman_schema_version: "2"`)
+
+`.reviews/<timestamp>-<branch>.json` looks like:
+
+```jsonc
+{
+  "wingman_schema_version": "2",
+  "branch": "feature-x",
+  "timestamp": "2026-04-27-104051",
+  "base": "main",
+  "reviewer": {
+    "tool": "codex",
+    "tool_version": "0.121.0",
+    "model": "gpt-5.5",
+    "provider": "openai",
+    "reasoning_effort": "medium",
+    "session_id": "019dce11-...",
+    "wall_seconds": 87
+  },
+  "raw_review": "...full codex output...",
+  "findings": [],
+  "resolutions": [],
+  "status": "needs_categorization"
+}
+```
+
+The structured `reviewer` block makes it trivial to compare findings across models, plot review-time trends, and audit which model produced which output. Older v1 files (no `wingman_schema_version`) can be upgraded in place with `python3 scripts/migrate-reviews.py` from this repo.
+
 ## How it works
 
 ```

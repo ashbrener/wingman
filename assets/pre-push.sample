@@ -1,0 +1,91 @@
+# --- Wingman: Codex review (non-blocking) ---
+# Runs codex review in background after push on feature branches.
+# Push proceeds immediately — findings saved to .reviews/ for /review-loop.
+#
+# When you want a sync review on a material change, run manually pre-push:
+#     codex review --base <ref>     # or --base HEAD~1 for delta
+# That blocks for the review duration; fix findings; then push (this hook
+# fires async behind you, which is fine — sync was already done).
+#
+# Configuration via environment variables (both optional):
+#   WINGMAN_BASE   git base for the review diff      (default: main)
+#   WINGMAN_MODEL  pin a specific codex model name   (default: codex CLI's own latest)
+#
+# Output JSON shape: wingman_schema_version "2" — see scripts/migrate-reviews.py
+# in the wingman repo to upgrade older review files.
+
+WINGMAN_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+WINGMAN_TIMESTAMP=$(date +%Y-%m-%d-%H%M%S)
+WINGMAN_REVIEW_DIR=".reviews"
+WINGMAN_REVIEW_FILE="${WINGMAN_REVIEW_DIR}/${WINGMAN_TIMESTAMP}-${WINGMAN_BRANCH//\//-}.json"
+WINGMAN_BASE="${WINGMAN_BASE:-main}"
+
+# Skip main/develop/master branches
+if [[ "$WINGMAN_BRANCH" != "main" && "$WINGMAN_BRANCH" != "master" && "$WINGMAN_BRANCH" != "develop" ]]; then
+    mkdir -p "$WINGMAN_REVIEW_DIR"
+
+    _wingman_run() {
+        local _start _end _wall
+        _start=$(date +%s)
+        if [ -n "${WINGMAN_MODEL:-}" ]; then
+            REVIEW_OUTPUT=$(codex review -c "model=\"$WINGMAN_MODEL\"" --base "$WINGMAN_BASE" 2>&1) || true
+        else
+            REVIEW_OUTPUT=$(codex review --base "$WINGMAN_BASE" 2>&1) || true
+        fi
+        _end=$(date +%s)
+        _wall=$((_end - _start))
+
+        # Extract reviewer metadata from the codex banner (first ~10 lines).
+        local _tool_version _model _provider _reasoning _session_id
+        _tool_version=$(printf "%s" "$REVIEW_OUTPUT" | grep -m1 "^OpenAI Codex" | sed -E "s/^OpenAI Codex ([^ ]+).*/\1/")
+        _model=$(printf "%s" "$REVIEW_OUTPUT" | grep -m1 "^model:" | sed "s/^model: *//")
+        _provider=$(printf "%s" "$REVIEW_OUTPUT" | grep -m1 "^provider:" | sed "s/^provider: *//")
+        _reasoning=$(printf "%s" "$REVIEW_OUTPUT" | grep -m1 "^reasoning effort:" | sed "s/^reasoning effort: *//")
+        _session_id=$(printf "%s" "$REVIEW_OUTPUT" | grep -m1 "^session id:" | sed "s/^session id: *//")
+
+        REVIEW_OUTPUT="$REVIEW_OUTPUT" \
+        WINGMAN_TOOL_VERSION="$_tool_version" \
+        WINGMAN_MODEL_USED="$_model" \
+        WINGMAN_PROVIDER="$_provider" \
+        WINGMAN_REASONING="$_reasoning" \
+        WINGMAN_SESSION_ID="$_session_id" \
+        WINGMAN_WALL_SECONDS="$_wall" \
+        WINGMAN_BRANCH="$WINGMAN_BRANCH" \
+        WINGMAN_TIMESTAMP="$WINGMAN_TIMESTAMP" \
+        WINGMAN_BASE="$WINGMAN_BASE" \
+        WINGMAN_REVIEW_FILE="$WINGMAN_REVIEW_FILE" \
+        python3 - <<'WINGMAN_PYEOF'
+import json, os
+raw = os.environ.get("REVIEW_OUTPUT", "")
+status = "clean" if not raw.strip() else "needs_categorization"
+def _v(name):
+    val = os.environ.get(name, "")
+    return val if val else None
+data = {
+    "wingman_schema_version": "2",
+    "branch": os.environ["WINGMAN_BRANCH"],
+    "timestamp": os.environ["WINGMAN_TIMESTAMP"],
+    "base": os.environ["WINGMAN_BASE"],
+    "reviewer": {
+        "tool": "codex",
+        "tool_version": _v("WINGMAN_TOOL_VERSION"),
+        "model": _v("WINGMAN_MODEL_USED"),
+        "provider": _v("WINGMAN_PROVIDER"),
+        "reasoning_effort": _v("WINGMAN_REASONING"),
+        "session_id": _v("WINGMAN_SESSION_ID"),
+        "wall_seconds": int(os.environ.get("WINGMAN_WALL_SECONDS", "0")),
+    },
+    "raw_review": raw,
+    "findings": [],
+    "resolutions": [],
+    "status": status,
+}
+with open(os.environ["WINGMAN_REVIEW_FILE"], "w") as f:
+    json.dump(data, f, indent=2)
+    f.write("\n")
+WINGMAN_PYEOF
+    }
+
+    _wingman_run &
+fi
+# --- End Wingman ---
