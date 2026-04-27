@@ -29,46 +29,16 @@ Detect the project's git hooks directory:
 
 If a `pre-push` hook already exists, append the Wingman section wrapped in clearly marked comments. Do not overwrite existing hook content.
 
-Append to the pre-push hook:
+The canonical hook block lives at `assets/pre-push.sample` in the wingman pack — single source of truth. `scripts/install.sh` reads it and appends to the user's hook (or creates one with a `#!/bin/bash` shebang if no hook exists).
+
+To install manually without `scripts/install.sh`, append the contents of `assets/pre-push.sample` to your hook:
 
 ```bash
-# --- Wingman: Codex review (non-blocking) ---
-# Runs codex review in background after push on feature branches.
-# Push proceeds immediately — findings saved to .reviews/ for /review-loop.
-
-WINGMAN_BRANCH=$(git rev-parse --abbrev-ref HEAD)
-WINGMAN_TIMESTAMP=$(date +%Y-%m-%d-%H%M%S)
-WINGMAN_REVIEW_DIR=".reviews"
-WINGMAN_REVIEW_FILE="${WINGMAN_REVIEW_DIR}/${WINGMAN_TIMESTAMP}-${WINGMAN_BRANCH//\//-}.json"
-
-# Skip main/develop/master branches
-if [[ "$WINGMAN_BRANCH" != "main" && "$WINGMAN_BRANCH" != "master" && "$WINGMAN_BRANCH" != "develop" ]]; then
-    mkdir -p "$WINGMAN_REVIEW_DIR"
-
-    # Run in background — push proceeds immediately
-    (
-        REVIEW_OUTPUT=$(codex review --base main 2>&1) || true
-
-        if [ -z "$REVIEW_OUTPUT" ]; then
-            echo "{\"branch\":\"$WINGMAN_BRANCH\",\"timestamp\":\"$WINGMAN_TIMESTAMP\",\"findings\":[],\"status\":\"clean\"}" > "$WINGMAN_REVIEW_FILE"
-        else
-            cat > "$WINGMAN_REVIEW_FILE" <<WINGMAN_EOF
-{
-  "branch": "$WINGMAN_BRANCH",
-  "timestamp": "$WINGMAN_TIMESTAMP",
-  "raw_review": $(echo "$REVIEW_OUTPUT" | python3 -c "import sys,json; print(json.dumps(sys.stdin.read()))"),
-  "findings": [],
-  "resolutions": [],
-  "status": "needs_categorization"
-}
-WINGMAN_EOF
-        fi
-    ) &
-fi
-# --- End Wingman ---
+cat <wingman-pack>/assets/pre-push.sample >> .git/hooks/pre-push
+chmod +x .git/hooks/pre-push
 ```
 
-Make the hook executable with `chmod +x`.
+The block detects with marker comment `# --- Wingman: Codex review (non-blocking) ---` so re-installation is idempotent. Make the hook executable with `chmod +x`.
 
 ### 2. Reviews directory
 

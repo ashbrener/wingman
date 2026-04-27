@@ -36,6 +36,35 @@ If uncategorized findings exist, use those. If none exist (or `.reviews/` is emp
 - Ask Codex to report: line number, category (lint/logic/architecture/security), severity (critical/high/medium/low), and a one-line description for each finding
 - Save the output to `.reviews/<timestamp>-<branch>.json` in the standard format
 
+### Review file shape (`wingman_schema_version: "2"`)
+
+```jsonc
+{
+  "wingman_schema_version": "2",
+  "branch": "feature-x",
+  "timestamp": "2026-04-27-104051",
+  "base": "main",                 // git base used for the diff (WINGMAN_BASE)
+  "reviewer": {
+    "tool": "codex",
+    "tool_version": "0.121.0",    // codex CLI version
+    "model": "gpt-5.5",           // model that did the review
+    "provider": "openai",
+    "reasoning_effort": "medium",
+    "session_id": "019dce11-...",
+    "wall_seconds": 87            // time codex spent generating the review
+  },
+  "raw_review": "...full codex output, kept for forensics...",
+  "findings": [],                 // populated by /review-loop categorization
+  "resolutions": [],              // populated when fixes land
+  "status": "needs_categorization"
+}
+```
+
+Older files written by wingman v1 (no `wingman_schema_version` field) are
+upgraded by `python3 scripts/migrate-reviews.py` from the wingman repo.
+Consumer code should branch on the presence of `wingman_schema_version`
+to handle both shapes.
+
 ## Step 2: Parse, categorize, and present overview
 
 For each uncategorized review file, parse the `raw_review` field and extract individual findings. Categorize each as:

@@ -16,6 +16,26 @@ Also read the current `.claude/rules/review-patterns.md`.
 
 If fewer than 3 categorized reviews exist, tell the user there isn't enough data yet and suggest running more `/review:loop` cycles first.
 
+### Schema-aware reading
+
+Files written by wingman v2 (`wingman_schema_version: "2"`) carry a
+top-level `reviewer` block with `tool_version`, `model`, `provider`,
+`reasoning_effort`, `session_id`, and `wall_seconds`. Use these when
+analysing trends:
+
+- Group findings by `reviewer.model` to compare findings produced by
+  different models (e.g. did gpt-5.5 surface different patterns than
+  gpt-5.4?).
+- Plot `reviewer.wall_seconds` over time to spot codex performance
+  regressions or model-tier upgrades.
+- Group by `reviewer.tool_version` when interpreting findings — a tool
+  upgrade can change which categories surface.
+
+Older v1 files (no `wingman_schema_version`) lack these fields. Either
+run `python3 scripts/migrate-reviews.py` from the wingman repo to
+backfill (best-effort extraction from `raw_review` prose), or treat
+v1 files as `model: "unknown"` for trend analysis.
+
 ## Step 2: Frequency analysis
 
 Identify the top 5 most frequent finding patterns across all reviews. For each:
