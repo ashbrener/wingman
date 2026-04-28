@@ -53,13 +53,15 @@ npx skills add ashbrener/wingman -a <agent>     # specific agent only
 
 ### Upgrades
 
-The Wingman block in your `pre-push` hook carries a `# wingman-hook-version: N` stamp. Re-running `npx skills add ashbrener/wingman` (or `/review-setup`) compares the installed version against the version shipped in the pack:
+The Wingman block in your `pre-push` hook carries a `# wingman-hook-version: N` stamp (currently `2`). Re-running the installer — `bash scripts/install.sh`, `npx skills add ashbrener/wingman`, or `/review-setup` — compares the installed version against the version shipped in the pack:
 
 - **older installed** → strips the old block and appends the new one (in-place upgrade)
 - **same version** → skips, leaves the hook untouched
-- **`--force` / `--reinstall`** → unconditionally replaces the block
+- **`--force` / `--reinstall`** → unconditionally replaces the block (use this when you want to force a re-stamp without bumping the version, e.g. recovering from a hand-edited hook)
 
 This means bug fixes to the hook propagate automatically the next time you re-run setup. Pre-v2 installs (no version stamp) are treated as v1 and upgraded.
+
+Run `bash scripts/install.sh --help` for full installer usage details.
 
 ## Configuration
 
@@ -216,6 +218,18 @@ Wingman detects your project's linter automatically:
 - Python → ruff
 - JavaScript/TypeScript → eslint or biome
 - Go, Rust, etc. → language-appropriate tooling
+
+## CI
+
+Every pull request runs [`.github/workflows/wingman-ci.yml`](.github/workflows/wingman-ci.yml), which exercises three jobs:
+
+| Job | What it does |
+|---|---|
+| `lint` | `shellcheck --severity=error` on `scripts/install.sh` and `assets/pre-push.sample` |
+| `syntax` | `bash -n` on both shell files; extracts the embedded Python heredoc from the hook and runs `py_compile` on it |
+| `install-smoke` | Runs the installer through three scenarios — fresh install, v1 → v2 upgrade, and `--force` reinstall — asserting the hook ends up with exactly one Wingman block and the correct `# wingman-hook-version` stamp |
+
+CI runs on Linux. The installer itself is portable to macOS — PR #6 switched to a cross-platform `mktemp` invocation that works on both BSD (macOS) and GNU (Linux) coreutils, so the same `bash scripts/install.sh` flow is exercised in development on macOS and in CI on Linux.
 
 ## License
 
