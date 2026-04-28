@@ -1,0 +1,138 @@
+name: wingman-ci
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  lint:
+    name: lint (shellcheck)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+
+      - name: shellcheck install.sh
+        run: shellcheck --severity=error scripts/install.sh
+
+      - name: shellcheck pre-push.sample (as bash)
+        run: shellcheck --severity=error --shell=bash assets/pre-push.sample
+
+  syntax:
+    name: syntax (bash -n + py_compile)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: bash -n install.sh
+        run: bash -n scripts/install.sh
+
+      - name: bash -n pre-push.sample
+        run: bash -n assets/pre-push.sample
+
+      - name: extract embedded python heredoc
+        run: |
+          awk '
+            /python3 - <<.WINGMAN_PYEOF./ { capture = 1; next }
+            /^WINGMAN_PYEOF$/ && capture { capture = 0; next }
+            capture { print }
+          ' assets/pre-push.sample > /tmp/extracted.py
+          if [ ! -s /tmp/extracted.py ]; then
+              echo "Failed to extract python heredoc from assets/pre-push.sample" >&2
+              exit 1
+          fi
+          echo "--- extracted python ---"
+          cat /tmp/extracted.py
+          echo "------------------------"
+
+      - name: py_compile extracted heredoc
+        run: python3 -c "import py_compile; py_compile.compile('/tmp/extracted.py', doraise=True)"
+
+  install-smoke:
+    name: install-smoke (fresh / upgrade / --force)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: run install scenarios
+        env:
+          WINGMAN_SRC: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+
+          # --- Fixtures ---
+          WORK=$(mktemp -d)
+          cd "$WORK"
+          git init -q -b main
+          git config user.email "ci@example.com"
+          git config user.name "ci"
+          git commit -q --allow-empty -m "init"
+
+          assert_contains() {
+              local file="$1" needle="$2"
+              if ! grep -qF -- "$needle" "$file"; then
+                  echo "ASSERT FAIL: '$needle' not found in $file" >&2
+                  return 1
+              fi
+          }
+          assert_not_contains() {
+              local file="$1" needle="$2"
+              if grep -qF -- "$needle" "$file"; then
+                  echo "ASSERT FAIL: '$needle' unexpectedly found in $file" >&2
+                  return 1
+              fi
+          }
+          count_blocks() {
+              grep -c "^# --- Wingman: Codex review" "$1" || true
+          }
+
+          # --- Scenario 1: fresh install ---
+          echo "::group::fresh install"
+          "$WINGMAN_SRC/scripts/install.sh"
+          HOOK=".git/hooks/pre-push"
+          test -f "$HOOK" || { echo "hook missing"; exit 1; }
+          assert_contains "$HOOK" "# wingman-hook-version: 2"
+          assert_contains "$HOOK" "WINGMAN_REVIEW_INPUT"
+          assert_not_contains "$HOOK" 'REVIEW_OUTPUT="$REVIEW_OUTPUT"'
+          [ "$(count_blocks "$HOOK")" = "1" ] || { echo "expected 1 block"; exit 1; }
+          echo "::endgroup::"
+
+          # --- Scenario 2: v1 -> v2 upgrade ---
+          echo "::group::v1 -> v2 upgrade"
+          rm -rf "$WORK" && WORK=$(mktemp -d) && cd "$WORK"
+          git init -q -b main && git config user.email ci@e.com && git config user.name ci
+          git commit -q --allow-empty -m init
+          mkdir -p .git/hooks
+          # Pre-PR-#4 v1 sample lives at SHA 4b38606 in this repo.
+          {
+              echo "#!/bin/bash"
+              echo ""
+              git -C "$WINGMAN_SRC" show 4b38606:assets/pre-push.sample
+          } > .git/hooks/pre-push
+          chmod +x .git/hooks/pre-push
+          assert_contains .git/hooks/pre-push 'REVIEW_OUTPUT="$REVIEW_OUTPUT"'
+          assert_not_contains .git/hooks/pre-push "# wingman-hook-version: 2"
+          "$WINGMAN_SRC/scripts/install.sh"
+          assert_contains .git/hooks/pre-push "# wingman-hook-version: 2"
+          assert_contains .git/hooks/pre-push "WINGMAN_REVIEW_INPUT"
+          assert_not_contains .git/hooks/pre-push 'REVIEW_OUTPUT="$REVIEW_OUTPUT"'
+          [ "$(count_blocks .git/hooks/pre-push)" = "1" ] || { echo "expected 1 block after upgrade"; exit 1; }
+          echo "::endgroup::"
+
+          # --- Scenario 3: --force replaces ---
+          echo "::group::--force replaces"
+          rm -rf "$WORK" && WORK=$(mktemp -d) && cd "$WORK"
+          git init -q -b main && git config user.email ci@e.com && git config user.name ci
+          git commit -q --allow-empty -m init
+          "$WINGMAN_SRC/scripts/install.sh"
+          "$WINGMAN_SRC/scripts/install.sh" --force
+          assert_contains .git/hooks/pre-push "# wingman-hook-version: 2"
+          BLOCKS=$(count_blocks .git/hooks/pre-push)
+          [ "$BLOCKS" = "1" ] || { echo "expected exactly 1 wingman block after --force, got $BLOCKS"; exit 1; }
+          echo "::endgroup::"
+
+          echo "All install-smoke scenarios passed."
