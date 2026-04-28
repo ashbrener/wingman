@@ -35,7 +35,7 @@ if [[ "$WINGMAN_BRANCH" != "main" && "$WINGMAN_BRANCH" != "master" && "$WINGMAN_
     _wingman_run() {
         local _start _end _wall _review_file
         _start=$(date +%s)
-        _review_file=$(mktemp -t wingman-review)
+        _review_file=$(mktemp -t wingman-review.XXXXXX)
         # Clean up the temp file on any exit path from this function.
         trap 'rm -f "$_review_file"' RETURN
         if [ -n "${WINGMAN_MODEL:-}" ]; then

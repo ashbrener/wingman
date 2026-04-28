@@ -57,7 +57,6 @@ echo "Hooks directory: $HOOKS_DIR"
 # --- Install pre-push hook (append to existing) ---
 HOOK_FILE="$HOOKS_DIR/pre-push"
 MARKER="# --- Wingman: Codex review (non-blocking) ---"
-END_MARKER="# --- End Wingman ---"
 
 # Single source of truth for the hook block: assets/pre-push.sample.
 # install.sh only orchestrates append/create logic; the hook content
@@ -91,7 +90,7 @@ SAMPLE_VERSION=$(_extract_version "$WINGMAN_SAMPLE")
 _strip_wingman_block() {
     # $1: file path — removes the Wingman block in place.
     local _tmp
-    _tmp=$(mktemp -t wingman-hook)
+    _tmp=$(mktemp -t wingman-hook.XXXXXX)
     sed '/# --- Wingman: Codex review/,/# --- End Wingman ---/d' "$1" > "$_tmp"
     # Trim trailing blank lines so re-append doesn't accumulate whitespace.
     awk 'BEGIN{blank=0} { if ($0 ~ /^[[:space:]]*$/) { blank++ } else { for (i=0;i<blank;i++) print ""; blank=0; print } }' "$_tmp" > "$1"
@@ -146,7 +145,7 @@ fi
 OLD_HOOK="$HOOKS_DIR/post-commit"
 if [ -f "$OLD_HOOK" ] && grep -q "$MARKER" "$OLD_HOOK"; then
     # Check if the file ONLY contains the Wingman block (plus shebang)
-    NON_WINGMAN_LINES=$(sed '/# --- Wingman/,/# --- End Wingman ---/d' "$OLD_HOOK" | grep -v '^#!/' | grep -v '^$' | wc -l | tr -d ' ')
+    NON_WINGMAN_LINES=$(sed '/# --- Wingman/,/# --- End Wingman ---/d' "$OLD_HOOK" | grep -cvE '^(#!/|$)')
     if [ "$NON_WINGMAN_LINES" -eq 0 ]; then
         rm "$OLD_HOOK"
         # Also remove symlink if it exists
@@ -168,16 +167,20 @@ echo "Created: .reviews/"
 # --- Update .gitignore ---
 if [ -f .gitignore ]; then
     if ! grep -q ".reviews/\*.json" .gitignore; then
-        echo "" >> .gitignore
-        echo "# Wingman review data" >> .gitignore
-        echo ".reviews/*.json" >> .gitignore
+        {
+            echo ""
+            echo "# Wingman review data"
+            echo ".reviews/*.json"
+        } >> .gitignore
         echo "Updated: .gitignore"
     else
         echo ".gitignore: Wingman entry already present — skipping."
     fi
 else
-    echo "# Wingman review data" > .gitignore
-    echo ".reviews/*.json" >> .gitignore
+    {
+        echo "# Wingman review data"
+        echo ".reviews/*.json"
+    } > .gitignore
     echo "Created: .gitignore"
 fi
 
