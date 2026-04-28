@@ -1,6 +1,32 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# --- Parse flags ---
+FORCE_REINSTALL=0
+for arg in "$@"; do
+    case "$arg" in
+        --force|--reinstall)
+            FORCE_REINSTALL=1
+            ;;
+        -h|--help)
+            cat <<'USAGE'
+Usage: install.sh [--force]
+
+Options:
+  --force, --reinstall   Unconditionally replace any existing Wingman block
+                         in the pre-push hook, even if the installed version
+                         is up to date.
+USAGE
+            exit 0
+            ;;
+        *)
+            echo "Unknown argument: $arg" >&2
+            echo "Try: install.sh --help" >&2
+            exit 2
+            ;;
+    esac
+done
+
 echo "Wingman: Installing review feedback loop..."
 echo ""
 
@@ -31,6 +57,7 @@ echo "Hooks directory: $HOOKS_DIR"
 # --- Install pre-push hook (append to existing) ---
 HOOK_FILE="$HOOKS_DIR/pre-push"
 MARKER="# --- Wingman: Codex review (non-blocking) ---"
+END_MARKER="# --- End Wingman ---"
 
 # Single source of truth for the hook block: assets/pre-push.sample.
 # install.sh only orchestrates append/create logic; the hook content
@@ -44,13 +71,54 @@ if [ ! -f "$WINGMAN_SAMPLE" ]; then
     exit 1
 fi
 
+# --- Helpers: extract version stamps ---
+# Block format embeds `# wingman-hook-version: N` near the top. v1 (the
+# original release) had no stamp at all, so absence == 1.
+_extract_version() {
+    # $1: file path
+    local _v
+    _v=$(grep -m1 -E "^[[:space:]]*#[[:space:]]*wingman-hook-version:[[:space:]]*[0-9]+" "$1" 2>/dev/null \
+        | sed -E "s/^[[:space:]]*#[[:space:]]*wingman-hook-version:[[:space:]]*([0-9]+).*/\1/")
+    if [ -z "$_v" ]; then
+        echo "1"
+    else
+        echo "$_v"
+    fi
+}
+
+SAMPLE_VERSION=$(_extract_version "$WINGMAN_SAMPLE")
+
+_strip_wingman_block() {
+    # $1: file path — removes the Wingman block in place.
+    local _tmp
+    _tmp=$(mktemp -t wingman-hook)
+    sed '/# --- Wingman: Codex review/,/# --- End Wingman ---/d' "$1" > "$_tmp"
+    # Trim trailing blank lines so re-append doesn't accumulate whitespace.
+    awk 'BEGIN{blank=0} { if ($0 ~ /^[[:space:]]*$/) { blank++ } else { for (i=0;i<blank;i++) print ""; blank=0; print } }' "$_tmp" > "$1"
+    rm -f "$_tmp"
+}
+
 if [ -f "$HOOK_FILE" ]; then
     if grep -q "$MARKER" "$HOOK_FILE"; then
-        echo "Pre-push hook: Wingman block already present — skipping."
+        INSTALLED_VERSION=$(_extract_version "$HOOK_FILE")
+        if [ "$FORCE_REINSTALL" -eq 1 ]; then
+            _strip_wingman_block "$HOOK_FILE"
+            printf "\n" >> "$HOOK_FILE"
+            cat "$WINGMAN_SAMPLE" >> "$HOOK_FILE"
+            echo "Pre-push hook: --force replaced Wingman block (was v$INSTALLED_VERSION → now v$SAMPLE_VERSION)."
+        elif [ "$INSTALLED_VERSION" -lt "$SAMPLE_VERSION" ]; then
+            _strip_wingman_block "$HOOK_FILE"
+            printf "\n" >> "$HOOK_FILE"
+            cat "$WINGMAN_SAMPLE" >> "$HOOK_FILE"
+            echo "Pre-push hook: Upgraded Wingman block (v$INSTALLED_VERSION → v$SAMPLE_VERSION)."
+        else
+            echo "Pre-push hook: Wingman block already at v$INSTALLED_VERSION (current is v$SAMPLE_VERSION) — skipping."
+            echo "  Use 'install.sh --force' to reinstall anyway."
+        fi
     else
         printf "\n" >> "$HOOK_FILE"
         cat "$WINGMAN_SAMPLE" >> "$HOOK_FILE"
-        echo "Pre-push hook: Appended Wingman block to existing hook."
+        echo "Pre-push hook: Appended Wingman block to existing hook (v$SAMPLE_VERSION)."
     fi
 else
     mkdir -p "$(dirname "$HOOK_FILE")"
@@ -59,7 +127,7 @@ else
         echo ""
         cat "$WINGMAN_SAMPLE"
     } > "$HOOK_FILE"
-    echo "Pre-push hook: Created $HOOK_FILE"
+    echo "Pre-push hook: Created $HOOK_FILE (v$SAMPLE_VERSION)"
 fi
 
 chmod +x "$HOOK_FILE"

@@ -51,6 +51,16 @@ npx skills add ashbrener/wingman -a <agent>     # specific agent only
 
 `/review-setup` is idempotent — safe to run multiple times. It detects your hooks directory (`.git-hooks/`, `.githooks/`, `.husky/`, or `.git/hooks/`) and appends to existing pre-push hooks rather than overwriting.
 
+### Upgrades
+
+The Wingman block in your `pre-push` hook carries a `# wingman-hook-version: N` stamp. Re-running `npx skills add ashbrener/wingman` (or `/review-setup`) compares the installed version against the version shipped in the pack:
+
+- **older installed** → strips the old block and appends the new one (in-place upgrade)
+- **same version** → skips, leaves the hook untouched
+- **`--force` / `--reinstall`** → unconditionally replaces the block
+
+This means bug fixes to the hook propagate automatically the next time you re-run setup. Pre-v2 installs (no version stamp) are treated as v1 and upgraded.
+
 ## Configuration
 
 The pre-push hook honors two optional environment variables. Both have sensible defaults.
