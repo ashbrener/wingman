@@ -1,5 +1,5 @@
 # --- Wingman: Codex review (non-blocking) ---
-# wingman-hook-version: 2
+# wingman-hook-version: 3
 # Runs codex review in background after push on feature branches.
 # Push proceeds immediately — findings saved to .reviews/ for /review-loop.
 #
@@ -8,14 +8,25 @@
 # That blocks for the review duration; fix findings; then push (this hook
 # fires async behind you, which is fine — sync was already done).
 #
-# Configuration via environment variables (both optional):
-#   WINGMAN_BASE   git base for the review diff      (default: main)
-#   WINGMAN_MODEL  pin a specific codex model name   (default: codex CLI's own latest)
+# Configuration via environment variables (all optional):
+#   WINGMAN_BASE         git base for the review diff      (default: main)
+#   WINGMAN_MODEL        pin a specific codex model name   (default: codex CLI's own latest)
+#   WINGMAN_EXEMPTIONS   path to a YAML exemption file     (default: <repo>/.wingman-exemptions.yaml)
 #
-# Output JSON shape: wingman_schema_version "2" — see scripts/migrate-reviews.py
-# in the wingman repo to upgrade older review files.
+# Output JSON shape: wingman_schema_version "3" — see scripts/migrate-reviews.py
+# in the wingman repo to upgrade older review files. v3 adds:
+#   - "ci_status"      object summarising `gh pr checks` for the branch's PR
+#   - "convergence"    object summarising round-tracking + stop-rule signals
+#   - "exemptions"     array of exemption IDs passed into the codex prompt
+#   - synthetic findings prepended to "raw_review" when CI is RED, when the
+#     stop-rule is met, or when the same finding ID stagnates across rounds
 #
 # History:
+#   v3 — exemption file + CI awareness + round-tracking + audit-related-paths
+#        prompt. Lessons from spec 004's 12-round wingman convergence on
+#        project-arc: codex re-flagged ratified out-of-scope decisions,
+#        wingman didn't know `quality-gate` CI was red, no convergence
+#        signal across rounds, and per-round prompts only saw the diff.
 #   v2 — pass codex output via temp-file path in WINGMAN_REVIEW_INPUT instead
 #        of inlining the full review (often hundreds of KB) into envp[]. On
 #        macOS, argv + envp share ARG_MAX, so big pushes were failing with
@@ -27,26 +38,149 @@ WINGMAN_TIMESTAMP=$(date +%Y-%m-%d-%H%M%S)
 WINGMAN_REVIEW_DIR=".reviews"
 WINGMAN_REVIEW_FILE="${WINGMAN_REVIEW_DIR}/${WINGMAN_TIMESTAMP}-${WINGMAN_BRANCH//\//-}.json"
 WINGMAN_BASE="${WINGMAN_BASE:-main}"
+WINGMAN_EXEMPTIONS_FILE="${WINGMAN_EXEMPTIONS:-.wingman-exemptions.yaml}"
+WINGMAN_CONVERGENCE_FILE="${WINGMAN_REVIEW_DIR}/_convergence.json"
 
 # Skip main/develop/master branches
 if [[ "$WINGMAN_BRANCH" != "main" && "$WINGMAN_BRANCH" != "master" && "$WINGMAN_BRANCH" != "develop" ]]; then
     mkdir -p "$WINGMAN_REVIEW_DIR"
 
     _wingman_run() {
-        local _start _end _wall _review_file
+        local _start _end _wall _review_file _exemptions_text _prompt_file
+        local _ci_status_file _ci_summary_file _pr_number
         _start=$(date +%s)
         _review_file=$(mktemp -t wingman-review.XXXXXX)
-        # Clean up the temp file on any exit path from this function.
-        trap 'rm -f "$_review_file"' RETURN
+        _prompt_file=$(mktemp -t wingman-prompt.XXXXXX)
+        _ci_status_file=$(mktemp -t wingman-ci.XXXXXX)
+        _ci_summary_file=$(mktemp -t wingman-cisum.XXXXXX)
+        # Clean up the temp files on any exit path from this function.
+        # shellcheck disable=SC2064
+        trap "rm -f '$_review_file' '$_prompt_file' '$_ci_status_file' '$_ci_summary_file'" RETURN
+
+        # --- v3 Feature 1: Read exemption file (if present) ---------------
+        # Pass exemptions to codex via the prompt so the reviewer knows which
+        # findings have been ratified out-of-scope by the project. Codex
+        # either skips them entirely or surfaces them with an
+        # "EXEMPT (per rationale below)" tag — never as unaddressed findings.
+        _exemptions_text=""
+        if [ -f "$WINGMAN_EXEMPTIONS_FILE" ]; then
+            _exemptions_text=$(WINGMAN_EXEMPTIONS_FILE="$WINGMAN_EXEMPTIONS_FILE" python3 - <<'WINGMAN_EXEMPT_EOF'
+import os, sys
+path = os.environ["WINGMAN_EXEMPTIONS_FILE"]
+try:
+    with open(path, "r", encoding="utf-8") as f:
+        text = f.read()
+except OSError as e:
+    print(f"# Wingman: failed to read {path}: {e}", file=sys.stderr)
+    sys.exit(0)
+# Try PyYAML first; fall back to a tiny line parser that handles the
+# documented sample shape (list of mappings under top-level "exemptions:").
+try:
+    import yaml  # type: ignore
+    data = yaml.safe_load(text) or {}
+    items = data.get("exemptions", []) if isinstance(data, dict) else []
+except Exception:
+    items = []
+    current = None
+    in_list = False
+    for raw in text.splitlines():
+        line = raw.split("#", 1)[0].rstrip()
+        if not line.strip():
+            continue
+        if line.strip() == "exemptions:":
+            in_list = True
+            continue
+        if not in_list:
+            continue
+        if line.lstrip().startswith("- "):
+            if current is not None:
+                items.append(current)
+            current = {}
+            rest = line.lstrip()[2:].strip()
+            if ":" in rest:
+                k, _, v = rest.partition(":")
+                current[k.strip()] = v.strip().strip('"').strip("'")
+        elif current is not None and ":" in line:
+            k, _, v = line.partition(":")
+            current[k.strip()] = v.strip().strip('"').strip("'")
+    if current is not None:
+        items.append(current)
+if not items:
+    sys.exit(0)
+print("EXEMPTIONS (do NOT surface these as unaddressed findings):")
+for i, it in enumerate(items, 1):
+    if not isinstance(it, dict):
+        continue
+    eid = it.get("id", f"exemption-{i}")
+    pat = it.get("pattern", "")
+    rat = it.get("rationale", "")
+    ref = it.get("referenced_by", "")
+    print(f"  {i}. id={eid}")
+    if pat:
+        print(f"     pattern: {pat}")
+    if rat:
+        print(f"     rationale: {rat}")
+    if ref:
+        print(f"     referenced_by: {ref}")
+print("If a finding matches an exemption pattern, either skip it OR tag it")
+print("with 'EXEMPT (per rationale: <id>)' instead of as an unaddressed finding.")
+WINGMAN_EXEMPT_EOF
+            )
+        fi
+
+        # --- v3 Feature 4: Build the audit-related-paths prompt -----------
+        # Bigger per-round prompts close more findings per round. Codex audits
+        # not just the diff but also code paths that import from / are imported
+        # by the changed modules, surfacing same-class defects together.
+        {
+            echo "Review the diff against \"$WINGMAN_BASE\". ALSO audit any code paths"
+            echo "whose touched files import from, or are imported by, the changed"
+            echo "modules. If you find issues in those related paths that share the"
+            echo "same defect class as a finding in the diff, surface them in the same"
+            echo "review (don't wait for the next round)."
+            echo ""
+            echo "Examples of related-path audits:"
+            echo "  - If the diff touches services/upgrade/, audit commands/apply.py,"
+            echo "    commands/upgrade.py, services/scaffold/ for the same kinds of bugs."
+            echo "  - If the diff touches snapshot/restore logic, audit ALL snapshot-write"
+            echo "    call sites + ALL restore-call sites."
+            echo ""
+            if [ -n "$_exemptions_text" ]; then
+                echo "$_exemptions_text"
+                echo ""
+            fi
+        } > "$_prompt_file"
+
+        # --- Run codex review (with optional model pin) -------------------
         if [ -n "${WINGMAN_MODEL:-}" ]; then
-            codex review -c "model=\"$WINGMAN_MODEL\"" --base "$WINGMAN_BASE" >"$_review_file" 2>&1 || true
+            codex review -c "model=\"$WINGMAN_MODEL\"" --base "$WINGMAN_BASE" --prompt-file "$_prompt_file" >"$_review_file" 2>&1 \
+                || codex review -c "model=\"$WINGMAN_MODEL\"" --base "$WINGMAN_BASE" >"$_review_file" 2>&1 \
+                || true
         else
-            codex review --base "$WINGMAN_BASE" >"$_review_file" 2>&1 || true
+            codex review --base "$WINGMAN_BASE" --prompt-file "$_prompt_file" >"$_review_file" 2>&1 \
+                || codex review --base "$WINGMAN_BASE" >"$_review_file" 2>&1 \
+                || true
         fi
         _end=$(date +%s)
         _wall=$((_end - _start))
 
-        # Extract reviewer metadata from the codex banner (first ~10 lines).
+        # --- v3 Feature 2: CI awareness ----------------------------------
+        # After codex returns, ask gh whether the branch's PR has any failing
+        # required checks. If so, prepend a synthetic [P1] finding so the next
+        # remediation round addresses CI red instead of bandaging code that's
+        # locally green but CI red.
+        echo '{"state":"NONE","checks":[]}' > "$_ci_status_file"
+        : > "$_ci_summary_file"
+        _pr_number=""
+        if command -v gh >/dev/null 2>&1; then
+            _pr_number=$(gh pr list --head "$WINGMAN_BRANCH" --json number --jq '.[0].number' 2>/dev/null || true)
+            if [ -n "$_pr_number" ]; then
+                gh pr checks "$_pr_number" --json name,state,link --jq '.' \
+                    > "$_ci_status_file" 2>/dev/null || echo '{"state":"UNKNOWN","checks":[]}' > "$_ci_status_file"
+            fi
+        fi
+
+        # --- Reviewer banner extraction (unchanged from v2) ---------------
         local _tool_version _model _provider _reasoning _session_id
         _tool_version=$(grep -m1 "^OpenAI Codex" "$_review_file" | sed -E "s/^OpenAI Codex ([^ ]+).*/\1/")
         _model=$(grep -m1 "^model:" "$_review_file" | sed "s/^model: *//")
@@ -58,6 +192,8 @@ if [[ "$WINGMAN_BRANCH" != "main" && "$WINGMAN_BRANCH" != "master" && "$WINGMAN_
         # (hundreds of KB), which would overflow ARG_MAX on macOS and fail the
         # python3 exec with E2BIG.
         WINGMAN_REVIEW_INPUT="$_review_file" \
+        WINGMAN_CI_STATUS_INPUT="$_ci_status_file" \
+        WINGMAN_PR_NUMBER="$_pr_number" \
         WINGMAN_TOOL_VERSION="$_tool_version" \
         WINGMAN_MODEL_USED="$_model" \
         WINGMAN_PROVIDER="$_provider" \
@@ -68,16 +204,244 @@ if [[ "$WINGMAN_BRANCH" != "main" && "$WINGMAN_BRANCH" != "master" && "$WINGMAN_
         WINGMAN_TIMESTAMP="$WINGMAN_TIMESTAMP" \
         WINGMAN_BASE="$WINGMAN_BASE" \
         WINGMAN_REVIEW_FILE="$WINGMAN_REVIEW_FILE" \
+        WINGMAN_EXEMPTIONS_FILE="$WINGMAN_EXEMPTIONS_FILE" \
+        WINGMAN_CONVERGENCE_FILE="$WINGMAN_CONVERGENCE_FILE" \
         python3 - <<'WINGMAN_PYEOF'
-import json, os
-with open(os.environ["WINGMAN_REVIEW_INPUT"], "r", encoding="utf-8", errors="replace") as _f:
-    raw = _f.read()
-status = "clean" if not raw.strip() else "needs_categorization"
+import json, os, re, datetime
+
 def _v(name):
     val = os.environ.get(name, "")
     return val if val else None
+
+# --- Load codex review output -------------------------------------------
+with open(os.environ["WINGMAN_REVIEW_INPUT"], "r", encoding="utf-8", errors="replace") as _f:
+    raw = _f.read()
+
+# --- v3 Feature 1: Surface the exemption list in the payload -----------
+exemption_ids = []
+exemptions_path = os.environ.get("WINGMAN_EXEMPTIONS_FILE", "")
+if exemptions_path and os.path.isfile(exemptions_path):
+    try:
+        with open(exemptions_path, "r", encoding="utf-8") as _ef:
+            etext = _ef.read()
+        try:
+            import yaml  # type: ignore
+            edata = yaml.safe_load(etext) or {}
+            eitems = edata.get("exemptions", []) if isinstance(edata, dict) else []
+        except Exception:
+            eitems = []
+            current = None
+            in_list = False
+            for raw_line in etext.splitlines():
+                line = raw_line.split("#", 1)[0].rstrip()
+                if not line.strip():
+                    continue
+                if line.strip() == "exemptions:":
+                    in_list = True
+                    continue
+                if not in_list:
+                    continue
+                if line.lstrip().startswith("- "):
+                    if current is not None:
+                        eitems.append(current)
+                    current = {}
+                    rest = line.lstrip()[2:].strip()
+                    if ":" in rest:
+                        k, _, v = rest.partition(":")
+                        current[k.strip()] = v.strip().strip('"').strip("'")
+                elif current is not None and ":" in line:
+                    k, _, v = line.partition(":")
+                    current[k.strip()] = v.strip().strip('"').strip("'")
+            if current is not None:
+                eitems.append(current)
+        exemption_ids = [
+            it.get("id") for it in eitems
+            if isinstance(it, dict) and it.get("id")
+        ]
+    except OSError:
+        pass
+
+# --- v3 Feature 2: Parse CI status + build synthetic P1 if RED ---------
+ci_status_obj = {"state": "NONE", "checks": [], "pr_number": None, "failing": []}
+synthetic_findings = []
+try:
+    with open(os.environ["WINGMAN_CI_STATUS_INPUT"], "r", encoding="utf-8") as _cf:
+        ci_raw = _cf.read().strip()
+except OSError:
+    ci_raw = ""
+pr_number = os.environ.get("WINGMAN_PR_NUMBER", "") or None
+if ci_raw:
+    try:
+        ci_parsed = json.loads(ci_raw)
+    except json.JSONDecodeError:
+        ci_parsed = None
+    if isinstance(ci_parsed, list):
+        checks = ci_parsed
+    elif isinstance(ci_parsed, dict) and "checks" in ci_parsed:
+        checks = ci_parsed.get("checks") or []
+    else:
+        checks = []
+    failing = []
+    aggregate = "SUCCESS" if checks else "NONE"
+    for c in checks if isinstance(checks, list) else []:
+        if not isinstance(c, dict):
+            continue
+        state = (c.get("state") or c.get("status") or "").upper()
+        name = c.get("name") or c.get("context") or "unknown-check"
+        link = c.get("link") or c.get("targetUrl") or c.get("detailsUrl") or ""
+        if state in ("FAILURE", "FAIL", "ERROR", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED"):
+            failing.append({"name": name, "state": state, "link": link})
+            aggregate = "FAILURE"
+        elif state in ("PENDING", "IN_PROGRESS", "QUEUED"):
+            if aggregate != "FAILURE":
+                aggregate = "PENDING"
+    ci_status_obj = {
+        "state": aggregate,
+        "checks": checks if isinstance(checks, list) else [],
+        "pr_number": pr_number,
+        "failing": failing,
+    }
+    for fail in failing:
+        link = f" ({fail['link']})" if fail.get("link") else ""
+        synthetic_findings.append(
+            f"[P1] CI status: {fail['name']} = {fail['state']} — investigate "
+            f"and fix before continuing wingman convergence.{link}"
+        )
+
+# --- v3 Feature 3: Round-tracking + convergence detection --------------
+def _count_pri(text, tag):
+    # Match "[P1] ", "[P2] ", "P1:", "P1 -", "Priority 1", etc.
+    pat = rf"(?:^|\n)\s*(?:\[?{tag}\]?[\s:.\-]|Priority\s*{tag[1]}\b)"
+    return len(re.findall(pat, text, flags=re.IGNORECASE))
+
+p1_count = _count_pri(raw, "P1")
+p2_count = _count_pri(raw, "P2")
+p3_count = _count_pri(raw, "P3")
+# Synthetic CI-red findings count toward P1 too — they're prepended later.
+p1_count += len([s for s in synthetic_findings if s.startswith("[P1]")])
+
+# Heuristic finding-id extraction: codex tends to prefix findings with
+# "[P1] <id>:" or "Finding <id>:". We collect anything that looks like a
+# stable identifier so stagnation can be detected across rounds.
+finding_ids = []
+for m in re.finditer(r"\[P[123]\]\s+([A-Za-z0-9][\w\-./:]+)", raw):
+    finding_ids.append(m.group(1))
+for m in re.finditer(r"(?:^|\n)\s*Finding\s+([A-Za-z0-9][\w\-./:]+)", raw):
+    finding_ids.append(m.group(1))
+finding_ids = sorted(set(finding_ids))
+
+ledger_path = os.environ["WINGMAN_CONVERGENCE_FILE"]
+ledger = {"branch": os.environ["WINGMAN_BRANCH"], "rounds": [], "convergence": {}}
+if os.path.isfile(ledger_path):
+    try:
+        with open(ledger_path, "r", encoding="utf-8") as _lf:
+            existing = json.load(_lf)
+        if isinstance(existing, dict):
+            # If the branch changed, start a fresh ledger so we don't conflate.
+            if existing.get("branch") == os.environ["WINGMAN_BRANCH"]:
+                ledger = existing
+                ledger.setdefault("rounds", [])
+                ledger.setdefault("convergence", {})
+    except (OSError, json.JSONDecodeError):
+        pass
+
+round_number = len(ledger["rounds"]) + 1
+new_round = {
+    "round": round_number,
+    "timestamp": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    "review_file": os.path.basename(os.environ["WINGMAN_REVIEW_FILE"]),
+    "p1_count": p1_count,
+    "p2_count": p2_count,
+    "p3_count": p3_count,
+    "ci_status": ci_status_obj["state"],
+    "finding_ids": finding_ids,
+}
+ledger["rounds"].append(new_round)
+
+# Convergence detection: 0 P1 + ≤2 P2 for 2+ consecutive rounds.
+rounds = ledger["rounds"]
+consecutive_zero_p1 = 0
+for r in reversed(rounds):
+    if r.get("p1_count", 0) == 0:
+        consecutive_zero_p1 += 1
+    else:
+        break
+
+stop_rule_round = ledger.get("convergence", {}).get("stop_rule_met_at_round")
+last_two = rounds[-2:] if len(rounds) >= 2 else []
+stop_rule_met_now = (
+    len(last_two) == 2
+    and all(r.get("p1_count", 0) == 0 and r.get("p2_count", 0) <= 2 for r in last_two)
+)
+if stop_rule_met_now and not stop_rule_round:
+    stop_rule_round = round_number
+
+# Stagnation: same finding ID flagged in 2 consecutive rounds.
+stagnation_ids = []
+if len(rounds) >= 2:
+    prev_ids = set(rounds[-2].get("finding_ids") or [])
+    curr_ids = set(rounds[-1].get("finding_ids") or [])
+    stagnation_ids = sorted(prev_ids & curr_ids)
+
+# Trend: compare current p1+p2 to the previous round's.
+trend = "n/a"
+if len(rounds) >= 2:
+    prev_total = rounds[-2].get("p1_count", 0) + rounds[-2].get("p2_count", 0)
+    curr_total = p1_count + p2_count
+    if curr_total < prev_total:
+        trend = "converging"
+    elif curr_total == prev_total:
+        trend = "flat"
+    else:
+        trend = "diverging"
+elif p1_count + p2_count == 0:
+    trend = "converging"
+
+ledger["convergence"] = {
+    "stop_rule_met_at_round": stop_rule_round,
+    "consecutive_zero_p1_rounds": consecutive_zero_p1,
+    "stagnation_detected": bool(stagnation_ids),
+    "stagnation_ids": stagnation_ids,
+    "trend": trend,
+}
+
+with open(ledger_path, "w") as _lf:
+    json.dump(ledger, _lf, indent=2)
+    _lf.write("\n")
+
+# Convergence/stagnation notices get prepended like synthetic findings.
+notices = []
+if stop_rule_met_now:
+    notices.append(
+        f"[CONVERGENCE NOTICE] Round {round_number}: {p1_count} P1 + "
+        f"{p2_count} P2 — convergence stop-rule met (per RESUME §4 rule 12). "
+        "The remaining P2 findings can be exempted with documented rationale "
+        "per constitution v0.1.2 exemption type 3. Recommend declaring "
+        "convergence and updating PR body."
+    )
+if stagnation_ids:
+    notices.append(
+        f"[STAGNATION ALERT] Round {round_number}: finding(s) "
+        f"{', '.join(stagnation_ids)} flagged in 2 consecutive rounds. "
+        "Fix isn't sticking; manual investigation needed."
+    )
+
+# --- Build the final raw_review with synthetic findings prepended ------
+prepend_lines = []
+if synthetic_findings:
+    prepend_lines.append("=== Wingman v3 synthetic findings (auto-injected) ===")
+    prepend_lines.extend(synthetic_findings)
+    prepend_lines.append("")
+if notices:
+    prepend_lines.append("=== Wingman v3 round-tracking notices ===")
+    prepend_lines.extend(notices)
+    prepend_lines.append("")
+prepended = ("\n".join(prepend_lines) + ("\n" if prepend_lines else "")) + raw
+
+status = "clean" if not prepended.strip() else "needs_categorization"
+
 data = {
-    "wingman_schema_version": "2",
+    "wingman_schema_version": "3",
     "branch": os.environ["WINGMAN_BRANCH"],
     "timestamp": os.environ["WINGMAN_TIMESTAMP"],
     "base": os.environ["WINGMAN_BASE"],
@@ -90,7 +454,21 @@ data = {
         "session_id": _v("WINGMAN_SESSION_ID"),
         "wall_seconds": int(os.environ.get("WINGMAN_WALL_SECONDS", "0")),
     },
-    "raw_review": raw,
+    "ci_status": ci_status_obj,
+    "convergence": {
+        "round": round_number,
+        "p1_count": p1_count,
+        "p2_count": p2_count,
+        "p3_count": p3_count,
+        "stop_rule_met": stop_rule_met_now,
+        "consecutive_zero_p1_rounds": consecutive_zero_p1,
+        "stagnation_ids": stagnation_ids,
+        "trend": trend,
+    },
+    "exemptions": exemption_ids,
+    "synthetic_findings": synthetic_findings,
+    "notices": notices,
+    "raw_review": prepended,
     "findings": [],
     "resolutions": [],
     "status": status,

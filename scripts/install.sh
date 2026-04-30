@@ -36,6 +36,10 @@ if ! git rev-parse --git-dir > /dev/null 2>&1; then
     exit 1
 fi
 
+# Resolve repo root early — used by both the hook installer (relative
+# symlinks) and the exemption-sample copier (must land at repo root).
+REPO_ROOT=$(git rev-parse --show-toplevel)
+
 # --- Detect hooks directory ---
 HOOKS_DIR=""
 CUSTOM_HOOKS_PATH=$(git config core.hooksPath 2>/dev/null || true)
@@ -165,14 +169,24 @@ touch .reviews/.gitkeep
 echo "Created: .reviews/"
 
 # --- Update .gitignore ---
+# v3 also ignores the convergence ledger (`.reviews/_convergence.json`) —
+# it's runtime state, not source-of-truth. It still matches `.reviews/*.json`,
+# but we add an explicit line so a reader skimming the gitignore understands
+# why it's there.
 if [ -f .gitignore ]; then
     if ! grep -q ".reviews/\*.json" .gitignore; then
         {
             echo ""
             echo "# Wingman review data"
             echo ".reviews/*.json"
+            echo ".reviews/_convergence.json"
         } >> .gitignore
         echo "Updated: .gitignore"
+    elif ! grep -q ".reviews/_convergence.json" .gitignore; then
+        {
+            echo ".reviews/_convergence.json"
+        } >> .gitignore
+        echo "Updated: .gitignore (added _convergence.json)"
     else
         echo ".gitignore: Wingman entry already present — skipping."
     fi
@@ -180,8 +194,26 @@ else
     {
         echo "# Wingman review data"
         echo ".reviews/*.json"
+        echo ".reviews/_convergence.json"
     } > .gitignore
     echo "Created: .gitignore"
+fi
+
+# --- v3: Copy exemption sample (NEVER overwrite user's actual file) ---
+# The hook reads `<repo>/.wingman-exemptions.yaml` if it exists. We ship the
+# sample at the repo root as `.wingman-exemptions.yaml.sample` so the user
+# can `cp` it and customise. We never write `.wingman-exemptions.yaml`
+# directly — that's user-managed and committed (or not) at their discretion.
+WINGMAN_EXEMPT_SAMPLE_SRC="$SCRIPT_DIR/../assets/.wingman-exemptions.yaml.sample"
+WINGMAN_EXEMPT_SAMPLE_DST="$REPO_ROOT/.wingman-exemptions.yaml.sample"
+if [ -f "$WINGMAN_EXEMPT_SAMPLE_SRC" ]; then
+    if [ ! -f "$WINGMAN_EXEMPT_SAMPLE_DST" ] || [ "$FORCE_REINSTALL" -eq 1 ]; then
+        cp "$WINGMAN_EXEMPT_SAMPLE_SRC" "$WINGMAN_EXEMPT_SAMPLE_DST"
+        echo "Copied: $WINGMAN_EXEMPT_SAMPLE_DST"
+        echo "  (rename to .wingman-exemptions.yaml to activate; v3 hook reads it on push)"
+    else
+        echo "$WINGMAN_EXEMPT_SAMPLE_DST already present — skipping."
+    fi
 fi
 
 # --- Create learned patterns rule file ---

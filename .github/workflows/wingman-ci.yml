@@ -32,7 +32,7 @@ jobs:
       - name: bash -n pre-push.sample
         run: bash -n assets/pre-push.sample
 
-      - name: extract embedded python heredoc
+      - name: extract embedded python heredoc (payload writer)
         run: |
           awk '
             /python3 - <<.WINGMAN_PYEOF./ { capture = 1; next }
@@ -40,18 +40,36 @@ jobs:
             capture { print }
           ' assets/pre-push.sample > /tmp/extracted.py
           if [ ! -s /tmp/extracted.py ]; then
-              echo "Failed to extract python heredoc from assets/pre-push.sample" >&2
+              echo "Failed to extract WINGMAN_PYEOF heredoc from assets/pre-push.sample" >&2
               exit 1
           fi
-          echo "--- extracted python ---"
+          echo "--- extracted python (payload writer) ---"
           cat /tmp/extracted.py
-          echo "------------------------"
+          echo "-----------------------------------------"
 
-      - name: py_compile extracted heredoc
+      - name: py_compile payload heredoc
         run: python3 -c "import py_compile; py_compile.compile('/tmp/extracted.py', doraise=True)"
 
+      - name: extract embedded python heredoc (exemption parser, v3+)
+        run: |
+          awk '
+            /python3 - <<.WINGMAN_EXEMPT_EOF./ { capture = 1; next }
+            /^WINGMAN_EXEMPT_EOF$/ && capture { capture = 0; next }
+            capture { print }
+          ' assets/pre-push.sample > /tmp/extracted-exempt.py
+          if [ ! -s /tmp/extracted-exempt.py ]; then
+              echo "Failed to extract WINGMAN_EXEMPT_EOF heredoc from assets/pre-push.sample" >&2
+              exit 1
+          fi
+          echo "--- extracted python (exemption parser) ---"
+          cat /tmp/extracted-exempt.py
+          echo "-------------------------------------------"
+
+      - name: py_compile exemption heredoc
+        run: python3 -c "import py_compile; py_compile.compile('/tmp/extracted-exempt.py', doraise=True)"
+
   install-smoke:
-    name: install-smoke (fresh / upgrade / --force)
+    name: install-smoke (fresh / v1->v3 / v2->v3 / --force / exemptions / convergence)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -95,14 +113,25 @@ jobs:
           "$WINGMAN_SRC/scripts/install.sh"
           HOOK=".git/hooks/pre-push"
           test -f "$HOOK" || { echo "hook missing"; exit 1; }
-          assert_contains "$HOOK" "# wingman-hook-version: 2"
+          assert_contains "$HOOK" "# wingman-hook-version: 3"
           assert_contains "$HOOK" "WINGMAN_REVIEW_INPUT"
+          assert_contains "$HOOK" "WINGMAN_CONVERGENCE_FILE"
+          assert_contains "$HOOK" "WINGMAN_EXEMPTIONS_FILE"
           assert_not_contains "$HOOK" 'REVIEW_OUTPUT="$REVIEW_OUTPUT"'
           [ "$(count_blocks "$HOOK")" = "1" ] || { echo "expected 1 block"; exit 1; }
+          # v3 ships an exemption sample alongside the hook.
+          test -f .wingman-exemptions.yaml.sample \
+              || { echo "exemption sample not copied"; exit 1; }
+          # The actual exemption file is user-managed — must NOT be auto-created.
+          if [ -f .wingman-exemptions.yaml ]; then
+              echo "installer should not create .wingman-exemptions.yaml"; exit 1
+          fi
+          # _convergence.json must be gitignored.
+          assert_contains .gitignore "_convergence.json"
           echo "::endgroup::"
 
-          # --- Scenario 2: v1 -> v2 upgrade ---
-          echo "::group::v1 -> v2 upgrade"
+          # --- Scenario 2: v1 -> v3 upgrade ---
+          echo "::group::v1 -> v3 upgrade"
           rm -rf "$WORK" && WORK=$(mktemp -d) && cd "$WORK"
           git init -q -b main && git config user.email ci@e.com && git config user.name ci
           git commit -q --allow-empty -m init
@@ -115,24 +144,152 @@ jobs:
           } > .git/hooks/pre-push
           chmod +x .git/hooks/pre-push
           assert_contains .git/hooks/pre-push 'REVIEW_OUTPUT="$REVIEW_OUTPUT"'
-          assert_not_contains .git/hooks/pre-push "# wingman-hook-version: 2"
+          assert_not_contains .git/hooks/pre-push "# wingman-hook-version: 3"
           "$WINGMAN_SRC/scripts/install.sh"
-          assert_contains .git/hooks/pre-push "# wingman-hook-version: 2"
+          assert_contains .git/hooks/pre-push "# wingman-hook-version: 3"
           assert_contains .git/hooks/pre-push "WINGMAN_REVIEW_INPUT"
           assert_not_contains .git/hooks/pre-push 'REVIEW_OUTPUT="$REVIEW_OUTPUT"'
           [ "$(count_blocks .git/hooks/pre-push)" = "1" ] || { echo "expected 1 block after upgrade"; exit 1; }
           echo "::endgroup::"
 
-          # --- Scenario 3: --force replaces ---
+          # --- Scenario 3: v2 -> v3 upgrade ---
+          # Reproduces the upgrade path most users will hit: the v2 hook is
+          # already installed (from the previous wingman release) and the
+          # installer must strip-and-replace it in place.
+          echo "::group::v2 -> v3 upgrade"
+          rm -rf "$WORK" && WORK=$(mktemp -d) && cd "$WORK"
+          git init -q -b main && git config user.email ci@e.com && git config user.name ci
+          git commit -q --allow-empty -m init
+          mkdir -p .git/hooks
+          # The v2 sample lives at SHA 2fe82f4 in this repo (post-PR-#7 main).
+          {
+              echo "#!/bin/bash"
+              echo ""
+              git -C "$WINGMAN_SRC" show 2fe82f4:assets/pre-push.sample
+          } > .git/hooks/pre-push
+          chmod +x .git/hooks/pre-push
+          assert_contains .git/hooks/pre-push "# wingman-hook-version: 2"
+          assert_not_contains .git/hooks/pre-push "# wingman-hook-version: 3"
+          assert_not_contains .git/hooks/pre-push "WINGMAN_CONVERGENCE_FILE"
+          "$WINGMAN_SRC/scripts/install.sh"
+          assert_contains .git/hooks/pre-push "# wingman-hook-version: 3"
+          assert_not_contains .git/hooks/pre-push "# wingman-hook-version: 2"
+          assert_contains .git/hooks/pre-push "WINGMAN_CONVERGENCE_FILE"
+          assert_contains .git/hooks/pre-push "WINGMAN_EXEMPTIONS_FILE"
+          [ "$(count_blocks .git/hooks/pre-push)" = "1" ] || { echo "expected 1 block after v2->v3 upgrade"; exit 1; }
+          test -f .wingman-exemptions.yaml.sample || { echo "exemption sample not copied on upgrade"; exit 1; }
+          echo "::endgroup::"
+
+          # --- Scenario 4: --force replaces ---
           echo "::group::--force replaces"
           rm -rf "$WORK" && WORK=$(mktemp -d) && cd "$WORK"
           git init -q -b main && git config user.email ci@e.com && git config user.name ci
           git commit -q --allow-empty -m init
           "$WINGMAN_SRC/scripts/install.sh"
           "$WINGMAN_SRC/scripts/install.sh" --force
-          assert_contains .git/hooks/pre-push "# wingman-hook-version: 2"
+          assert_contains .git/hooks/pre-push "# wingman-hook-version: 3"
           BLOCKS=$(count_blocks .git/hooks/pre-push)
           [ "$BLOCKS" = "1" ] || { echo "expected exactly 1 wingman block after --force, got $BLOCKS"; exit 1; }
+          echo "::endgroup::"
+
+          # --- Scenario 5: exemption file parses + reaches the prompt ---
+          # Place an exemption file in the workspace, then exec the hook's
+          # exemption-extract heredoc directly (no codex needed) and assert the
+          # rendered text reaches the expected prompt shape.
+          echo "::group::exemption parsing"
+          rm -rf "$WORK" && WORK=$(mktemp -d) && cd "$WORK"
+          git init -q -b main && git config user.email ci@e.com && git config user.name ci
+          git commit -q --allow-empty -m init
+          "$WINGMAN_SRC/scripts/install.sh"
+          {
+            printf 'exemptions:\n'
+            printf '  - id: "smoke-test-exemption"\n'
+            printf '    pattern: "fake finding pattern"\n'
+            printf '    rationale: "Smoke-test rationale ratified by CI."\n'
+            printf '    referenced_by: "wingman-ci.yml smoke scenario 5"\n'
+          } > .wingman-exemptions.yaml
+          # Extract the exemption-rendering heredoc and run it directly.
+          awk '
+            /python3 - <<.WINGMAN_EXEMPT_EOF./ { capture = 1; next }
+            /^WINGMAN_EXEMPT_EOF$/ && capture { capture = 0; next }
+            capture { print }
+          ' .git/hooks/pre-push > /tmp/exempt.py
+          test -s /tmp/exempt.py || { echo "exempt heredoc not extracted"; exit 1; }
+          WINGMAN_EXEMPTIONS_FILE=.wingman-exemptions.yaml \
+              python3 /tmp/exempt.py > /tmp/exempt.out
+          grep -q "smoke-test-exemption" /tmp/exempt.out \
+              || { echo "exemption id missing from prompt"; cat /tmp/exempt.out; exit 1; }
+          grep -q "Smoke-test rationale" /tmp/exempt.out \
+              || { echo "exemption rationale missing from prompt"; cat /tmp/exempt.out; exit 1; }
+          grep -q "do NOT surface these as unaddressed findings" /tmp/exempt.out \
+              || { echo "exemption banner missing from prompt"; cat /tmp/exempt.out; exit 1; }
+          echo "::endgroup::"
+
+          # --- Scenario 6: convergence ledger schema ---
+          # Drive the JSON-payload heredoc directly with synthetic codex output
+          # to verify the _convergence.json ledger is appended-to with the
+          # documented schema.
+          echo "::group::convergence ledger schema"
+          mkdir -p .reviews
+          {
+            printf '[P1] some-finding-id: oh no, a real bug\n'
+            printf '[P2] another-id: a less urgent thing\n'
+          } > /tmp/fake-review.txt
+          echo '[]' > /tmp/fake-ci.json
+          awk '
+            /python3 - <<.WINGMAN_PYEOF./ { capture = 1; next }
+            /^WINGMAN_PYEOF$/ && capture { capture = 0; next }
+            capture { print }
+          ' .git/hooks/pre-push > /tmp/payload.py
+          test -s /tmp/payload.py || { echo "payload heredoc not extracted"; exit 1; }
+          run_payload() {
+              WINGMAN_REVIEW_INPUT=/tmp/fake-review.txt \
+              WINGMAN_CI_STATUS_INPUT=/tmp/fake-ci.json \
+              WINGMAN_PR_NUMBER="" \
+              WINGMAN_TOOL_VERSION="ci" \
+              WINGMAN_MODEL_USED="ci-model" \
+              WINGMAN_PROVIDER="ci-provider" \
+              WINGMAN_REASONING="low" \
+              WINGMAN_SESSION_ID="ci-session" \
+              WINGMAN_WALL_SECONDS="1" \
+              WINGMAN_BRANCH="feat/smoke" \
+              WINGMAN_TIMESTAMP="$(date +%Y-%m-%d-%H%M%S)" \
+              WINGMAN_BASE="main" \
+              WINGMAN_REVIEW_FILE=".reviews/$(date +%s%N)-smoke.json" \
+              WINGMAN_EXEMPTIONS_FILE="" \
+              WINGMAN_CONVERGENCE_FILE=".reviews/_convergence.json" \
+              python3 /tmp/payload.py
+          }
+          run_payload
+          test -f .reviews/_convergence.json || { echo "ledger missing"; exit 1; }
+          {
+            printf 'import json, sys\n'
+            printf "d = json.load(open('.reviews/_convergence.json'))\n"
+            printf "assert d['branch'] == 'feat/smoke', d\n"
+            printf "assert isinstance(d['rounds'], list) and len(d['rounds']) == 1, d\n"
+            printf "r = d['rounds'][0]\n"
+            printf "for k in ('round','timestamp','review_file','p1_count','p2_count','p3_count','ci_status'):\n"
+            printf "    assert k in r, f'missing key {k}'\n"
+            printf "assert r['p1_count'] == 1, r\n"
+            printf "assert r['p2_count'] == 1, r\n"
+            printf "assert 'convergence' in d and 'trend' in d['convergence']\n"
+            printf "print('ledger ok:', r)\n"
+          } > /tmp/assert_round1.py
+          python3 /tmp/assert_round1.py
+          # Second round — confirm the ledger appends and convergence math runs.
+          printf 'no findings, all clean.\n' > /tmp/fake-review.txt
+          # Distinct review-file name so timestamp collisions can't break ordering.
+          sleep 1
+          run_payload
+          {
+            printf 'import json\n'
+            printf "d = json.load(open('.reviews/_convergence.json'))\n"
+            printf "assert len(d['rounds']) == 2, d\n"
+            printf "assert d['rounds'][1]['p1_count'] == 0\n"
+            printf "assert d['convergence']['consecutive_zero_p1_rounds'] >= 1\n"
+            printf "print('two-round ledger ok')\n"
+          } > /tmp/assert_round2.py
+          python3 /tmp/assert_round2.py
           echo "::endgroup::"
 
           echo "All install-smoke scenarios passed."
