@@ -53,13 +53,24 @@ npx skills add ashbrener/wingman -a <agent>     # specific agent only
 
 ### Upgrades
 
-The Wingman block in your `pre-push` hook carries a `# wingman-hook-version: N` stamp (currently `2`). Re-running the installer — `bash scripts/install.sh`, `npx skills add ashbrener/wingman`, or `/review-setup` — compares the installed version against the version shipped in the pack:
+The Wingman block in your `pre-push` hook carries a `# wingman-hook-version: N` stamp (currently `3`). Re-running the installer — `bash scripts/install.sh`, `npx skills add ashbrener/wingman`, or `/review-setup` — compares the installed version against the version shipped in the pack:
 
 - **older installed** → strips the old block and appends the new one (in-place upgrade)
 - **same version** → skips, leaves the hook untouched
 - **`--force` / `--reinstall`** → unconditionally replaces the block (use this when you want to force a re-stamp without bumping the version, e.g. recovering from a hand-edited hook)
 
-This means bug fixes to the hook propagate automatically the next time you re-run setup. Pre-v2 installs (no version stamp) are treated as v1 and upgraded.
+This means bug fixes to the hook propagate automatically the next time you re-run setup. Pre-v2 installs (no version stamp) are treated as v1 and upgraded. v2 installs are upgraded to v3 in place.
+
+#### What's new in v3
+
+Four upgrades, all driven by lessons from a 12-round wingman convergence on `project-arc` spec 004 — see [`docs/wingman-v3-features.md`](docs/wingman-v3-features.md) for the full write-up.
+
+| # | Feature | Effect |
+|---|---|---|
+| 1 | `.wingman-exemptions.yaml` | Codex skips findings ratified out-of-scope by the project (e.g. constitutional rules, ratified ADRs). The installer ships a sample at `.wingman-exemptions.yaml.sample`. |
+| 2 | CI status awareness | After the review, the hook calls `gh pr checks` and prepends a synthetic P1 finding if a required check is RED — so the next remediation round addresses CI red instead of bandaging local-green code. |
+| 3 | Round tracking + convergence detection | `.reviews/_convergence.json` ledger; emits `[CONVERGENCE NOTICE]` when the stop-rule fires (`0 P1 + ≤2 P2` for 2 consecutive rounds) and `[STAGNATION ALERT]` when the same finding ID flags twice in a row. |
+| 4 | Audit-related-paths prompt | Codex now audits code paths importing from / imported by the changed modules — bigger per-round prompts → fewer total rounds. |
 
 Run `bash scripts/install.sh --help` for full installer usage details.
 
@@ -94,13 +105,13 @@ git push                       # hook fires async behind you (redundant but harm
 
 This keeps the hook simple and lets sync vs async be an act-by-act choice rather than a global config knob.
 
-## Output schema (`wingman_schema_version: "2"`)
+## Output schema (`wingman_schema_version: "3"`)
 
 `.reviews/<timestamp>-<branch>.json` looks like:
 
 ```jsonc
 {
-  "wingman_schema_version": "2",
+  "wingman_schema_version": "3",
   "branch": "feature-x",
   "timestamp": "2026-04-27-104051",
   "base": "main",
@@ -113,6 +124,25 @@ This keeps the hook simple and lets sync vs async be an act-by-act choice rather
     "session_id": "019dce11-...",
     "wall_seconds": 87
   },
+  "ci_status": {                            // v3 — gh pr checks snapshot
+    "state": "FAILURE",
+    "checks": [/* …gh pr checks output… */],
+    "pr_number": "42",
+    "failing": [{ "name": "quality-gate", "state": "FAILURE", "link": "…" }]
+  },
+  "convergence": {                          // v3 — round summary
+    "round": 8,
+    "p1_count": 0,
+    "p2_count": 2,
+    "p3_count": 0,
+    "stop_rule_met": true,
+    "consecutive_zero_p1_rounds": 5,
+    "stagnation_ids": [],
+    "trend": "converging"
+  },
+  "exemptions": ["shim-files-flat-paths"],   // v3 — IDs from .wingman-exemptions.yaml
+  "synthetic_findings": ["[P1] CI status: …"],
+  "notices": ["[CONVERGENCE NOTICE] …"],
   "raw_review": "...full codex output...",
   "findings": [],
   "resolutions": [],
@@ -120,7 +150,7 @@ This keeps the hook simple and lets sync vs async be an act-by-act choice rather
 }
 ```
 
-The structured `reviewer` block makes it trivial to compare findings across models, plot review-time trends, and audit which model produced which output. Older v1 files (no `wingman_schema_version`) can be upgraded in place with `python3 scripts/migrate-reviews.py` from this repo.
+The structured `reviewer` block makes it trivial to compare findings across models, plot review-time trends, and audit which model produced which output. v3 adds `ci_status`, `convergence`, `exemptions`, `synthetic_findings`, and `notices` — see [`docs/wingman-v3-features.md`](docs/wingman-v3-features.md). Older v1/v2 files (no `wingman_schema_version` or `"2"`) can be upgraded in place with `python3 scripts/migrate-reviews.py` from this repo.
 
 ## How it works
 
@@ -208,7 +238,9 @@ your-project/
 ├── .claude/rules/review-patterns.md   # Learned patterns (auto-loaded by agent)
 ├── .reviews/                          # Review data (gitignored)
 │   ├── 2026-04-15-120000-feature-auth.json
+│   ├── _convergence.json              # v3 — round-tracking ledger (gitignored)
 │   └── ...
+├── .wingman-exemptions.yaml.sample    # v3 — copy to .wingman-exemptions.yaml to activate
 └── .git-hooks/pre-push                # Wingman block appended (or wherever your hooks live)
 ```
 
@@ -227,7 +259,7 @@ Every pull request runs [`.github/workflows/wingman-ci.yml`](.github/workflows/w
 |---|---|
 | `lint` | `shellcheck --severity=error` on `scripts/install.sh` and `assets/pre-push.sample` |
 | `syntax` | `bash -n` on both shell files; extracts the embedded Python heredoc from the hook and runs `py_compile` on it |
-| `install-smoke` | Runs the installer through three scenarios — fresh install, v1 → v2 upgrade, and `--force` reinstall — asserting the hook ends up with exactly one Wingman block and the correct `# wingman-hook-version` stamp |
+| `install-smoke` | Runs the installer through six scenarios — fresh install, v1 → v3 upgrade, v2 → v3 upgrade, `--force` reinstall, exemption-file parsing, and `_convergence.json` ledger schema validation — asserting the hook ends up with exactly one Wingman block and the correct `# wingman-hook-version` stamp |
 
 CI runs on Linux. The installer itself is portable to macOS — PR #6 switched to a cross-platform `mktemp` invocation that works on both BSD (macOS) and GNU (Linux) coreutils, so the same `bash scripts/install.sh` flow is exercised in development on macOS and in CI on Linux.
 

@@ -1,0 +1,47 @@
+# .wingman-exemptions.yaml — Wingman v3+ exemption file
+# ---------------------------------------------------------------------------
+# Findings to suppress from codex review output. Each entry is a documented
+# exemption — codex sees the rationale and skips the finding (or surfaces it
+# with "EXEMPT (per rationale: <id>)" tag instead of as an unaddressed finding).
+#
+# Place this file at the repo root as `.wingman-exemptions.yaml`. It is read
+# by the wingman pre-push hook on each push and passed into the codex review
+# prompt as part of the system context.
+#
+# Override the path with the WINGMAN_EXEMPTIONS environment variable:
+#     WINGMAN_EXEMPTIONS=docs/exemptions/codex.yaml git push
+#
+# Each exemption needs:
+#   id            — short, kebab-case identifier (used to tag matching findings)
+#   pattern       — regex (case-insensitive) the codex finding text is matched against
+#   rationale     — single-line explanation; surfaced verbatim to codex
+#   referenced_by — pointer to the constitutional/spec/ADR document that ratified the decision
+#
+# When in doubt, prefer fixing the underlying issue over adding an exemption.
+# Exemptions exist for ratified out-of-scope decisions, not for "we'll get to it later."
+
+exemptions:
+  - id: "shim-files-flat-paths"
+    pattern: "preserve old top-level paths via shim files|flat path shim|shim modules at flat paths"
+    rationale: "Constitution v0.1.3 directory-as-namespace rule rejects permanent shims at flattened import paths."
+    referenced_by: "constitution.md L227-234"
+
+  - id: "uvx-synthetic-base"
+    pattern: "uvx project-arc==.*for synthetic.base|synthetic base via uvx|delegate to uvx for base resolution"
+    rationale: "Spec 004 Round 2 R-005 ratified Option A (sibling-local snapshot + SHA) over Option C (uvx delegation) — semantic flaw in Option C."
+    referenced_by: "specs/004-upgrade-and-apply-to-existing/spec.md §Session 2026-04-29 (Round 2)"
+
+  - id: "test-fixture-todo-strings"
+    pattern: "TODO string in test fixture|placeholder TODO in fixture data"
+    rationale: "Test fixtures intentionally contain TODO strings to exercise the linter — not actionable."
+    referenced_by: "tests/README.md §Fixture conventions"
+
+  - id: "vendored-spec-kit-edits"
+    pattern: "edit \\.specify/|modify vendored speckit|change \\.claude/skills/speckit-"
+    rationale: "Vendored spec-kit files are upstream-managed — never patched in-tree (CLAUDE.md, MEMORY feedback_no_speckit_edits)."
+    referenced_by: "CLAUDE.md §No-edit list"
+
+  - id: "legacy-django-models-no-typehints"
+    pattern: "missing type hints? on Django model field|add type annotation to .* model field"
+    rationale: "Project CLAUDE.md explicitly waives type hints on Django model fields when not feasible."
+    referenced_by: "CLAUDE.md §Python Files / Django Models"
