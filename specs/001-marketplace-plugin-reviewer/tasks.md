@@ -24,13 +24,13 @@ before the hook is modified.
 
 ## Phase 1: Setup (Shared Infrastructure)
 
-- [ ] T001 Verify working branch is `feat/marketplace-plugin` and required local tools exist (`git`, `python3`, `shellcheck`, and `claude plugin validate`); note any missing tool so its verification step can fall back. (no file change)
+- [x] T001 Verify working branch is `feat/marketplace-plugin` and required local tools exist (`git`, `python3`, `shellcheck`, and `claude plugin validate`); note any missing tool so its verification step can fall back. (no file change)
 
 ---
 
 ## Phase 2: Foundational (Blocking Prerequisites)
 
-- [ ] T002 Confirm no data migration is needed — the review record stays `wingman_schema_version: "3"` (only `reviewer.tool/provider` values and the new `reviewer_missing` status vary); record that US1 is fully independent while US2–US4 share `assets/pre-push.sample` and must be sequenced. (no file change)
+- [x] T002 Confirm no data migration is needed — the review record stays `wingman_schema_version: "3"` (only `reviewer.tool/provider` values and the new `reviewer_missing` status vary); record that US1 is fully independent while US2–US4 share `assets/pre-push.sample` and must be sequenced. (no file change)
 
 **Checkpoint**: US1 may proceed immediately; US2→US3→US4 share the hook file.
 
@@ -42,11 +42,11 @@ before the hook is modified.
 
 **Independent Test**: `claude plugin validate . --strict` passes; from a clean Claude Code, `/plugin marketplace add ashbrener/wingman` + `/plugin install wingman` exposes the three `/wingman:*` commands.
 
-- [ ] T003 [US1] Create `.claude-plugin/plugin.json` per `specs/001-marketplace-plugin-reviewer/contracts/plugin-manifest.md` (name `wingman`, version `1.0.0`, keywords array, MIT, repo URLs).
-- [ ] T004 [US1] Create `.claude-plugin/marketplace.json` per the same contract (`owner`, one `plugins[]` entry with `source: "./"`).
-- [ ] T005 [US1] Validate: run `claude plugin validate . --strict` (exit 0, no warnings); if unavailable, fall back to a `python3 -c "import json; json.load(...)"` parse check and record that validate must run pre-submission.
-- [ ] T006 [P] [US1] In `README.md`, add an "Install as a Claude Code plugin" section (`/plugin marketplace add ashbrener/wingman` → `/plugin install wingman` → `/wingman:review-setup`) and note the `/wingman:*` namespace.
-- [ ] T007 [US1] Verify skills auto-discover: `ls skills/*/SKILL.md` resolves the three skills (become `/wingman:review-setup|review-loop|review-retro`); no file moves needed.
+- [x] T003 [US1] Create `.claude-plugin/plugin.json` per `specs/001-marketplace-plugin-reviewer/contracts/plugin-manifest.md` (name `wingman`, version `1.0.0`, keywords array, MIT, repo URLs).
+- [x] T004 [US1] Create `.claude-plugin/marketplace.json` per the same contract (`owner`, one `plugins[]` entry with `source: "./"`).
+- [x] T005 [US1] Validate: run `claude plugin validate . --strict` (exit 0, no warnings); if unavailable, fall back to a `python3 -c "import json; json.load(...)"` parse check and record that validate must run pre-submission.
+- [x] T006 [P] [US1] In `README.md`, add an "Install as a Claude Code plugin" section (`/plugin marketplace add ashbrener/wingman` → `/plugin install wingman` → `/wingman:review-setup`) and note the `/wingman:*` namespace.
+- [x] T007 [US1] Verify skills auto-discover: `ls skills/*/SKILL.md` resolves the three skills (become `/wingman:review-setup|review-loop|review-retro`); no file moves needed.
 
 **Checkpoint**: Plugin is installable and listed — minimum shippable value.
 
@@ -73,7 +73,7 @@ before the hook is modified.
 - [ ] T015 [US2] In `skills/review-setup/SKILL.md`, make prerequisites reviewer-agnostic (codex default; gemini/claude via `WINGMAN_REVIEWER`) and persist the chosen repo default to `.wingman-reviewer`.
 - [ ] T016 [P] [US2] In `skills/review-loop/SKILL.md`, de-Codex the description + fresh-review path (use the configured reviewer; note `reviewer.tool` varies).
 - [ ] T017 [P] [US2] In `skills/review-retro/SKILL.md`, generalize wording and add grouping by `reviewer.tool`.
-- [ ] T018 [P] [US2] In `README.md`, lead with the write-back differentiator and add a `WINGMAN_REVIEWER` row to the Configuration table (generalize the `WINGMAN_MODEL` row).
+- [x] T018 [P] [US2] In `README.md`, lead with the write-back differentiator and add a `WINGMAN_REVIEWER` row to the Configuration table (generalize the `WINGMAN_MODEL` row).
 - [ ] T019 [US2] Static checks: `bash -n assets/pre-push.sample`, `shellcheck --severity=error --shell=bash assets/pre-push.sample`, and `py_compile` of the extracted `WINGMAN_PYEOF` heredoc — all clean.
 - [ ] T020 [US2] Run the Scenario 8 reviewer.tool assertion locally → PASS.
 
@@ -129,7 +129,7 @@ before the hook is modified.
 
 **Independent Test**: `npx skills add ashbrener/wingman` installs the three skills for a non-Claude-Code agent.
 
-- [ ] T030 [P] [US5] In `README.md`, retain the `npx skills add` section and add a dual-command table mapping `/wingman:*` (plugin) ↔ `/review-*` (skills CLI).
+- [x] T030 [P] [US5] In `README.md`, retain the `npx skills add` section and add a dual-command table mapping `/wingman:*` (plugin) ↔ `/review-*` (skills CLI).
 - [ ] T031 [US5] Verify the three `skills/*/SKILL.md` frontmatter (`name`, `description`) is intact and non-namespaced invocation still resolves.
 
 **Checkpoint**: No regression for existing multi-agent users.

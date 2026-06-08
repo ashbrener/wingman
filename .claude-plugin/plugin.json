@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "wingman",
+  "displayName": "Wingman",
+  "version": "1.0.0",
+  "description": "Cross-model code review that deletes its own findings. A different AI model reviews your diff on push; accepted findings are encoded back into your project rules and linter config so the same mistake can't recur.",
+  "author": { "name": "Ash Brener", "url": "https://github.com/ashbrener" },
+  "homepage": "https://github.com/ashbrener/wingman",
+  "repository": "https://github.com/ashbrener/wingman",
+  "license": "MIT",
+  "keywords": ["code-review", "cross-model", "review", "linting", "git-hook", "code-quality", "self-improving"]
+}
