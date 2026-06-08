@@ -111,12 +111,13 @@ before the hook is modified.
 ### Tests for User Story 4 (test-first) ⚠️
 
 - [ ] T026 [P] [US4] In `.github/workflows/wingman-ci.yml`, retarget the v1→ and v2→ scenarios to v4, add a v3→v4 scenario (seed from SHA `fb82fed`), retarget `--force` to v4, bump fresh-install asserts to version `4`, and update the job name; run locally against current sample → FAIL (still v3).
+- [ ] T026a [P] [US4] In the v3→v4 scenario, BEFORE running the upgrade, seed prior review data — write `.reviews/2026-01-01-000000-feat-x.json` (any JSON) and `.reviews/_convergence.json` — then AFTER the upgrade assert both files still exist with unchanged contents (data-preservation for FR-010 / SC-004, not just block count).
 
 ### Implementation for User Story 4 (sequential — `assets/pre-push.sample`, then installer)
 
 - [ ] T027 [US4] In `assets/pre-push.sample`, bump `# wingman-hook-version: 3` → `4`, keep line 1 marker byte-identical, document `WINGMAN_REVIEWER` in the header, and add a v4 History entry.
 - [ ] T028 [US4] In `scripts/install.sh`, generalize the post-install message (line ~248) from "Codex reviews in background" to a reviewer-neutral phrasing; confirm `SAMPLE_VERSION` now auto-derives to 4 (no detection change).
-- [ ] T029 [US4] Run the full `install-smoke` job locally (fresh / v1→v4 / v2→v4 / v3→v4 / --force / exemptions / convergence / reviewer.tool) → all scenarios pass with exactly one block each.
+- [ ] T029 [US4] Run the full `install-smoke` job locally (fresh / v1→v4 / v2→v4 / v3→v4 / --force / exemptions / convergence / reviewer.tool) → all scenarios pass with exactly one block each, and the v3→v4 data-preservation assertion (T026a) passes.
 
 **Checkpoint**: Upgrades are clean and data-preserving.
 
@@ -151,7 +152,7 @@ before the hook is modified.
 
 - **Setup (P1)** → **Foundational (P2)** → **User Stories** → **Polish (P8)**.
 - **US1 (P1)** is independent (manifests + README plugin section) — can ship as MVP alone.
-- **US2 (P1) → US3 (P2) → US4 (P4)** must be sequenced: all edit `assets/pre-push.sample`. Within each, test task first (FAIL), then implementation, then re-run (PASS).
+- **US2 (P1) → US3 (P2) → US4 (P2)** must be sequenced: all edit `assets/pre-push.sample`. Within each, test task first (FAIL), then implementation, then re-run (PASS).
 - **US5 (P3)** is independent (README + skills verification).
 - **Polish** depends on all desired stories.
 
