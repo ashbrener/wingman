@@ -23,10 +23,10 @@ top-level `reviewer` block with `tool_version`, `model`, `provider`,
 `reasoning_effort`, `session_id`, and `wall_seconds`. Use these when
 analysing trends:
 
-- Group findings by `reviewer.model` to compare findings produced by
-  different models (e.g. did gpt-5.5 surface different patterns than
-  gpt-5.4?).
-- Plot `reviewer.wall_seconds` over time to spot codex performance
+- Group findings by `reviewer.tool` (codex/gemini/claude) and by
+  `reviewer.model` to compare findings produced by different reviewers and
+  models (e.g. did gemini surface different patterns than codex?).
+- Plot `reviewer.wall_seconds` over time to spot reviewer performance
   regressions or model-tier upgrades.
 - Group by `reviewer.tool_version` when interpreting findings — a tool
   upgrade can change which categories surface.

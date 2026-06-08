@@ -1,5 +1,5 @@
 # --- Wingman: Codex review (non-blocking) ---
-# wingman-hook-version: 3
+# wingman-hook-version: 4
 # Runs codex review in background after push on feature branches.
 # Push proceeds immediately — findings saved to .reviews/ for /review-loop.
 #
@@ -9,8 +9,11 @@
 # fires async behind you, which is fine — sync was already done).
 #
 # Configuration via environment variables (all optional):
+#   WINGMAN_REVIEWER     reviewer CLI: codex | gemini | claude  (default: codex)
+#                        resolution: env var > .wingman-reviewer file > codex
 #   WINGMAN_BASE         git base for the review diff      (default: main)
-#   WINGMAN_MODEL        pin a specific codex model name   (default: codex CLI's own latest)
+#   WINGMAN_MODEL        pin a model for the selected reviewer (default: the
+#                        reviewer CLI's own latest model)
 #   WINGMAN_EXEMPTIONS   path to a YAML exemption file     (default: <repo>/.wingman-exemptions.yaml)
 #
 # Output JSON shape: wingman_schema_version "3" — see scripts/migrate-reviews.py
@@ -22,6 +25,11 @@
 #     stop-rule is met, or when the same finding ID stagnates across rounds
 #
 # History:
+#   v4 — pluggable reviewer (WINGMAN_REVIEWER = codex|gemini|claude). codex
+#        keeps its native `codex review`; gemini/claude get a constructed
+#        diff+prompt (uniform [P1/P2/P3] output contract) piped via stdin.
+#        Per-reviewer metadata; missing/unknown reviewer → reviewer_missing
+#        record (push never blocked). Marker line unchanged for auto-upgrade.
 #   v3 — exemption file + CI awareness + round-tracking + audit-related-paths
 #        prompt. Lessons from spec 004's 12-round wingman convergence on
 #        project-arc: codex re-flagged ratified out-of-scope decisions,
@@ -41,21 +49,29 @@ WINGMAN_BASE="${WINGMAN_BASE:-main}"
 WINGMAN_EXEMPTIONS_FILE="${WINGMAN_EXEMPTIONS:-.wingman-exemptions.yaml}"
 WINGMAN_CONVERGENCE_FILE="${WINGMAN_REVIEW_DIR}/_convergence.json"
 
+# Reviewer resolution: env var > .wingman-reviewer repo file > codex (D7).
+# The file is READ, never sourced (no code execution at push time).
+if [ -z "${WINGMAN_REVIEWER:-}" ] && [ -f .wingman-reviewer ]; then
+    WINGMAN_REVIEWER=$(tr -d '[:space:]' < .wingman-reviewer)
+fi
+WINGMAN_REVIEWER="${WINGMAN_REVIEWER:-codex}"
+
 # Skip main/develop/master branches
 if [[ "$WINGMAN_BRANCH" != "main" && "$WINGMAN_BRANCH" != "master" && "$WINGMAN_BRANCH" != "develop" ]]; then
     mkdir -p "$WINGMAN_REVIEW_DIR"
 
     _wingman_run() {
-        local _start _end _wall _review_file _exemptions_text _prompt_file
+        local _start _end _wall _review_file _exemptions_text _prompt_file _full_prompt_file
         local _ci_status_file _ci_summary_file _pr_number
         _start=$(date +%s)
         _review_file=$(mktemp -t wingman-review.XXXXXX)
         _prompt_file=$(mktemp -t wingman-prompt.XXXXXX)
+        _full_prompt_file=$(mktemp -t wingman-fullprompt.XXXXXX)
         _ci_status_file=$(mktemp -t wingman-ci.XXXXXX)
         _ci_summary_file=$(mktemp -t wingman-cisum.XXXXXX)
         # Clean up the temp files on any exit path from this function.
         # shellcheck disable=SC2064
-        trap "rm -f '$_review_file' '$_prompt_file' '$_ci_status_file' '$_ci_summary_file'" RETURN
+        trap "rm -f '$_review_file' '$_prompt_file' '$_full_prompt_file' '$_ci_status_file' '$_ci_summary_file'" RETURN
 
         # --- v3 Feature 1: Read exemption file (if present) ---------------
         # Pass exemptions to codex via the prompt so the reviewer knows which
@@ -151,15 +167,68 @@ WINGMAN_EXEMPT_EOF
             fi
         } > "$_prompt_file"
 
-        # --- Run codex review (with optional model pin) -------------------
-        if [ -n "${WINGMAN_MODEL:-}" ]; then
-            codex review -c "model=\"$WINGMAN_MODEL\"" --base "$WINGMAN_BASE" --prompt-file "$_prompt_file" >"$_review_file" 2>&1 \
-                || codex review -c "model=\"$WINGMAN_MODEL\"" --base "$WINGMAN_BASE" >"$_review_file" 2>&1 \
-                || true
+        # --- Run the configured reviewer (WINGMAN_REVIEWER) --------------
+        # codex has a native `review` subcommand that computes the diff itself.
+        # gemini/claude have no review mode, so we construct the full prompt
+        # (uniform-format preamble + audit prompt + the diff) and pipe it via
+        # stdin — NOT argv — because the diff can exceed ARG_MAX (see v2 note).
+        if ! command -v "$WINGMAN_REVIEWER" >/dev/null 2>&1; then
+            {
+                echo "WINGMAN_REVIEWER_MISSING: reviewer '$WINGMAN_REVIEWER' not found on PATH."
+                echo "Install it, or set WINGMAN_REVIEWER to one of: codex, gemini, claude."
+            } > "$_review_file"
         else
-            codex review --base "$WINGMAN_BASE" --prompt-file "$_prompt_file" >"$_review_file" 2>&1 \
-                || codex review --base "$WINGMAN_BASE" >"$_review_file" 2>&1 \
-                || true
+            case "$WINGMAN_REVIEWER" in
+                codex)
+                    if [ -n "${WINGMAN_MODEL:-}" ]; then
+                        codex review -c "model=\"$WINGMAN_MODEL\"" --base "$WINGMAN_BASE" --prompt-file "$_prompt_file" >"$_review_file" 2>&1 \
+                            || codex review -c "model=\"$WINGMAN_MODEL\"" --base "$WINGMAN_BASE" >"$_review_file" 2>&1 \
+                            || true
+                    else
+                        codex review --base "$WINGMAN_BASE" --prompt-file "$_prompt_file" >"$_review_file" 2>&1 \
+                            || codex review --base "$WINGMAN_BASE" >"$_review_file" 2>&1 \
+                            || true
+                    fi
+                    ;;
+                gemini|claude)
+                    # Reviewers are asked to emit the same [P1|P2|P3] file:line
+                    # (category) lines the downstream parser already expects.
+                    {
+                        echo "You are a code reviewer giving a second opinion on a diff."
+                        echo "For EACH finding, output exactly one line in this format:"
+                        echo "  [P1|P2|P3] <file>:<line> (<category>) - <one-line description>"
+                        echo "category is one of: logic, security, architecture, lint."
+                        echo "Use [P1] critical, [P2] should-fix, [P3] nit."
+                        echo "If there are no issues, output the single line: No findings."
+                        echo ""
+                        cat "$_prompt_file"
+                        echo ""
+                        echo "=== DIFF: git diff $WINGMAN_BASE...HEAD ==="
+                        git diff "$WINGMAN_BASE"...HEAD 2>/dev/null
+                    } > "$_full_prompt_file"
+                    if [ "$WINGMAN_REVIEWER" = "gemini" ]; then
+                        # gemini-cli reads the prompt from stdin (non-interactive).
+                        if [ -n "${WINGMAN_MODEL:-}" ]; then
+                            gemini -m "$WINGMAN_MODEL" < "$_full_prompt_file" >"$_review_file" 2>&1 || true
+                        else
+                            gemini < "$_full_prompt_file" >"$_review_file" 2>&1 || true
+                        fi
+                    else
+                        # claude -p (print mode) reads the prompt from stdin.
+                        if [ -n "${WINGMAN_MODEL:-}" ]; then
+                            claude -p --model "$WINGMAN_MODEL" < "$_full_prompt_file" >"$_review_file" 2>&1 || true
+                        else
+                            claude -p < "$_full_prompt_file" >"$_review_file" 2>&1 || true
+                        fi
+                    fi
+                    ;;
+                *)
+                    {
+                        echo "WINGMAN_REVIEWER_MISSING: unknown reviewer '$WINGMAN_REVIEWER'."
+                        echo "Set WINGMAN_REVIEWER to one of: codex, gemini, claude."
+                    } > "$_review_file"
+                    ;;
+            esac
         fi
         _end=$(date +%s)
         _wall=$((_end - _start))
@@ -180,18 +249,35 @@ WINGMAN_EXEMPT_EOF
             fi
         fi
 
-        # --- Reviewer banner extraction (unchanged from v2) ---------------
-        local _tool_version _model _provider _reasoning _session_id
-        _tool_version=$(grep -m1 "^OpenAI Codex" "$_review_file" | sed -E "s/^OpenAI Codex ([^ ]+).*/\1/")
-        _model=$(grep -m1 "^model:" "$_review_file" | sed "s/^model: *//")
-        _provider=$(grep -m1 "^provider:" "$_review_file" | sed "s/^provider: *//")
-        _reasoning=$(grep -m1 "^reasoning effort:" "$_review_file" | sed "s/^reasoning effort: *//")
-        _session_id=$(grep -m1 "^session id:" "$_review_file" | sed "s/^session id: *//")
+        # --- Reviewer metadata extraction (per WINGMAN_REVIEWER) ----------
+        local _tool _tool_version _model _provider _reasoning _session_id
+        _tool="$WINGMAN_REVIEWER"
+        case "$WINGMAN_REVIEWER" in
+            codex)
+                _tool_version=$(grep -m1 "^OpenAI Codex" "$_review_file" | sed -E "s/^OpenAI Codex ([^ ]+).*/\1/")
+                _model=$(grep -m1 "^model:" "$_review_file" | sed "s/^model: *//")
+                _provider=$(grep -m1 "^provider:" "$_review_file" | sed "s/^provider: *//")
+                _reasoning=$(grep -m1 "^reasoning effort:" "$_review_file" | sed "s/^reasoning effort: *//")
+                _session_id=$(grep -m1 "^session id:" "$_review_file" | sed "s/^session id: *//")
+                ;;
+            gemini)
+                _tool_version=$(gemini --version 2>/dev/null | head -n1)
+                _model="${WINGMAN_MODEL:-default}"; _provider="google"; _reasoning=""; _session_id=""
+                ;;
+            claude)
+                _tool_version=$(claude --version 2>/dev/null | head -n1)
+                _model="${WINGMAN_MODEL:-default}"; _provider="anthropic"; _reasoning=""; _session_id=""
+                ;;
+            *)
+                _tool_version=""; _model="${WINGMAN_MODEL:-}"; _provider=""; _reasoning=""; _session_id=""
+                ;;
+        esac
 
         # Pass the *path* to the review (tiny) instead of the review *content*
         # (hundreds of KB), which would overflow ARG_MAX on macOS and fail the
         # python3 exec with E2BIG.
         WINGMAN_REVIEW_INPUT="$_review_file" \
+        WINGMAN_TOOL="$_tool" \
         WINGMAN_CI_STATUS_INPUT="$_ci_status_file" \
         WINGMAN_PR_NUMBER="$_pr_number" \
         WINGMAN_TOOL_VERSION="$_tool_version" \
@@ -425,6 +511,11 @@ if stagnation_ids:
         f"{', '.join(stagnation_ids)} flagged in 2 consecutive rounds. "
         "Fix isn't sticking; manual investigation needed."
     )
+if (os.environ.get("WINGMAN_TOOL") or "") == "claude":
+    notices.append(
+        "[CROSS-MODEL NOTE] reviewer 'claude' may match the code author — "
+        "for a true second opinion use codex or gemini."
+    )
 
 # --- Build the final raw_review with synthetic findings prepended ------
 prepend_lines = []
@@ -439,6 +530,8 @@ if notices:
 prepended = ("\n".join(prepend_lines) + ("\n" if prepend_lines else "")) + raw
 
 status = "clean" if not prepended.strip() else "needs_categorization"
+if raw.startswith("WINGMAN_REVIEWER_MISSING"):
+    status = "reviewer_missing"
 
 data = {
     "wingman_schema_version": "3",
@@ -446,7 +539,7 @@ data = {
     "timestamp": os.environ["WINGMAN_TIMESTAMP"],
     "base": os.environ["WINGMAN_BASE"],
     "reviewer": {
-        "tool": "codex",
+        "tool": os.environ.get("WINGMAN_TOOL") or "codex",
         "tool_version": _v("WINGMAN_TOOL_VERSION"),
         "model": _v("WINGMAN_MODEL_USED"),
         "provider": _v("WINGMAN_PROVIDER"),

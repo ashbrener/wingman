@@ -69,7 +69,7 @@ jobs:
         run: python3 -c "import py_compile; py_compile.compile('/tmp/extracted-exempt.py', doraise=True)"
 
   install-smoke:
-    name: install-smoke (fresh / v1->v3 / v2->v3 / --force / exemptions / convergence)
+    name: install-smoke (fresh / v1->v4 / v2->v4 / v3->v4 / --force / exemptions / convergence / reviewer.tool)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -113,8 +113,11 @@ jobs:
           "$WINGMAN_SRC/scripts/install.sh"
           HOOK=".git/hooks/pre-push"
           test -f "$HOOK" || { echo "hook missing"; exit 1; }
-          assert_contains "$HOOK" "# wingman-hook-version: 3"
+          assert_contains "$HOOK" "# wingman-hook-version: 4"
           assert_contains "$HOOK" "WINGMAN_REVIEW_INPUT"
+          assert_contains "$HOOK" "WINGMAN_REVIEWER"
+          assert_contains "$HOOK" "gemini|claude)"
+          assert_contains "$HOOK" "WINGMAN_REVIEWER_MISSING"
           assert_contains "$HOOK" "WINGMAN_CONVERGENCE_FILE"
           assert_contains "$HOOK" "WINGMAN_EXEMPTIONS_FILE"
           assert_not_contains "$HOOK" 'REVIEW_OUTPUT="$REVIEW_OUTPUT"'
@@ -131,7 +134,7 @@ jobs:
           echo "::endgroup::"
 
           # --- Scenario 2: v1 -> v3 upgrade ---
-          echo "::group::v1 -> v3 upgrade"
+          echo "::group::v1 -> v4 upgrade"
           rm -rf "$WORK" && WORK=$(mktemp -d) && cd "$WORK"
           git init -q -b main && git config user.email ci@e.com && git config user.name ci
           git commit -q --allow-empty -m init
@@ -146,7 +149,7 @@ jobs:
           assert_contains .git/hooks/pre-push 'REVIEW_OUTPUT="$REVIEW_OUTPUT"'
           assert_not_contains .git/hooks/pre-push "# wingman-hook-version: 3"
           "$WINGMAN_SRC/scripts/install.sh"
-          assert_contains .git/hooks/pre-push "# wingman-hook-version: 3"
+          assert_contains .git/hooks/pre-push "# wingman-hook-version: 4"
           assert_contains .git/hooks/pre-push "WINGMAN_REVIEW_INPUT"
           assert_not_contains .git/hooks/pre-push 'REVIEW_OUTPUT="$REVIEW_OUTPUT"'
           [ "$(count_blocks .git/hooks/pre-push)" = "1" ] || { echo "expected 1 block after upgrade"; exit 1; }
@@ -156,7 +159,7 @@ jobs:
           # Reproduces the upgrade path most users will hit: the v2 hook is
           # already installed (from the previous wingman release) and the
           # installer must strip-and-replace it in place.
-          echo "::group::v2 -> v3 upgrade"
+          echo "::group::v2 -> v4 upgrade"
           rm -rf "$WORK" && WORK=$(mktemp -d) && cd "$WORK"
           git init -q -b main && git config user.email ci@e.com && git config user.name ci
           git commit -q --allow-empty -m init
@@ -172,12 +175,43 @@ jobs:
           assert_not_contains .git/hooks/pre-push "# wingman-hook-version: 3"
           assert_not_contains .git/hooks/pre-push "WINGMAN_CONVERGENCE_FILE"
           "$WINGMAN_SRC/scripts/install.sh"
-          assert_contains .git/hooks/pre-push "# wingman-hook-version: 3"
+          assert_contains .git/hooks/pre-push "# wingman-hook-version: 4"
           assert_not_contains .git/hooks/pre-push "# wingman-hook-version: 2"
           assert_contains .git/hooks/pre-push "WINGMAN_CONVERGENCE_FILE"
           assert_contains .git/hooks/pre-push "WINGMAN_EXEMPTIONS_FILE"
-          [ "$(count_blocks .git/hooks/pre-push)" = "1" ] || { echo "expected 1 block after v2->v3 upgrade"; exit 1; }
+          [ "$(count_blocks .git/hooks/pre-push)" = "1" ] || { echo "expected 1 block after v2->v4 upgrade"; exit 1; }
           test -f .wingman-exemptions.yaml.sample || { echo "exemption sample not copied on upgrade"; exit 1; }
+          echo "::endgroup::"
+
+          # --- Scenario 3b: v3 -> v4 upgrade (+ data preservation) ---
+          echo "::group::v3 -> v4 upgrade"
+          rm -rf "$WORK" && WORK=$(mktemp -d) && cd "$WORK"
+          git init -q -b main && git config user.email ci@e.com && git config user.name ci
+          git commit -q --allow-empty -m init
+          mkdir -p .git/hooks .reviews
+          # The v3 sample lives at SHA fb82fed (PR #8 merge on main).
+          {
+              echo "#!/bin/bash"
+              echo ""
+              git -C "$WINGMAN_SRC" show fb82fed:assets/pre-push.sample
+          } > .git/hooks/pre-push
+          chmod +x .git/hooks/pre-push
+          assert_contains .git/hooks/pre-push "# wingman-hook-version: 3"
+          assert_not_contains .git/hooks/pre-push "WINGMAN_REVIEWER"
+          # Seed prior review data to assert it survives the upgrade (FR-010/SC-004).
+          echo '{"wingman_schema_version":"3","status":"categorized"}' > .reviews/2026-01-01-000000-feat-x.json
+          echo '{"branch":"feat-x","rounds":[]}' > .reviews/_convergence.json
+          _seed_a=$(cat .reviews/2026-01-01-000000-feat-x.json)
+          _seed_b=$(cat .reviews/_convergence.json)
+          "$WINGMAN_SRC/scripts/install.sh"
+          assert_contains .git/hooks/pre-push "# wingman-hook-version: 4"
+          assert_not_contains .git/hooks/pre-push "# wingman-hook-version: 3"
+          assert_contains .git/hooks/pre-push "WINGMAN_REVIEWER"
+          [ "$(count_blocks .git/hooks/pre-push)" = "1" ] || { echo "expected 1 block after v3->v4 upgrade"; exit 1; }
+          # Data preservation: prior review files untouched.
+          test -f .reviews/2026-01-01-000000-feat-x.json || { echo "prior review file lost on upgrade"; exit 1; }
+          [ "$(cat .reviews/2026-01-01-000000-feat-x.json)" = "$_seed_a" ] || { echo "review file mutated on upgrade"; exit 1; }
+          [ "$(cat .reviews/_convergence.json)" = "$_seed_b" ] || { echo "convergence ledger mutated on upgrade"; exit 1; }
           echo "::endgroup::"
 
           # --- Scenario 4: --force replaces ---
@@ -187,7 +221,7 @@ jobs:
           git commit -q --allow-empty -m init
           "$WINGMAN_SRC/scripts/install.sh"
           "$WINGMAN_SRC/scripts/install.sh" --force
-          assert_contains .git/hooks/pre-push "# wingman-hook-version: 3"
+          assert_contains .git/hooks/pre-push "# wingman-hook-version: 4"
           BLOCKS=$(count_blocks .git/hooks/pre-push)
           [ "$BLOCKS" = "1" ] || { echo "expected exactly 1 wingman block after --force, got $BLOCKS"; exit 1; }
           echo "::endgroup::"
@@ -290,6 +324,35 @@ jobs:
             printf "print('two-round ledger ok')\n"
           } > /tmp/assert_round2.py
           python3 /tmp/assert_round2.py
+          echo "::endgroup::"
+
+          # --- Scenario 7: reviewer_missing status ---
+          # A raw review starting with WINGMAN_REVIEWER_MISSING must yield status
+          # "reviewer_missing" (graceful cold-install). Drives the payload heredoc
+          # (extracted as /tmp/payload.py in Scenario 6).
+          echo "::group::reviewer_missing status"
+          printf "WINGMAN_REVIEWER_MISSING: reviewer 'nope' not found on PATH.\n" > /tmp/fake-review.txt
+          RM=".reviews/missing-check.json"
+          WINGMAN_REVIEW_INPUT=/tmp/fake-review.txt WINGMAN_CI_STATUS_INPUT=/tmp/fake-ci.json \
+          WINGMAN_PR_NUMBER="" WINGMAN_TOOL="nope" WINGMAN_TOOL_VERSION="" WINGMAN_MODEL_USED="" \
+          WINGMAN_PROVIDER="" WINGMAN_REASONING="" WINGMAN_SESSION_ID="" WINGMAN_WALL_SECONDS="0" \
+          WINGMAN_BRANCH="feat/smoke" WINGMAN_TIMESTAMP="$(date +%Y-%m-%d-%H%M%S)" WINGMAN_BASE="main" \
+          WINGMAN_REVIEW_FILE="$RM" WINGMAN_EXEMPTIONS_FILE="" WINGMAN_CONVERGENCE_FILE=".reviews/_convergence.json" \
+          python3 /tmp/payload.py
+          python3 -c "import json; d=json.load(open('$RM')); assert d['status']=='reviewer_missing', d['status']; print('reviewer_missing ok')"
+          echo "::endgroup::"
+
+          # --- Scenario 8: reviewer.tool reflects WINGMAN_TOOL ---
+          echo "::group::reviewer.tool reflects WINGMAN_TOOL"
+          printf '[P3] x.py:1 (lint) — a nit\n' > /tmp/fake-review.txt
+          RT=".reviews/tool-check.json"
+          WINGMAN_REVIEW_INPUT=/tmp/fake-review.txt WINGMAN_CI_STATUS_INPUT=/tmp/fake-ci.json \
+          WINGMAN_PR_NUMBER="" WINGMAN_TOOL="gemini" WINGMAN_TOOL_VERSION="x" WINGMAN_MODEL_USED="gemini-x" \
+          WINGMAN_PROVIDER="google" WINGMAN_REASONING="" WINGMAN_SESSION_ID="" WINGMAN_WALL_SECONDS="1" \
+          WINGMAN_BRANCH="feat/smoke" WINGMAN_TIMESTAMP="$(date +%Y-%m-%d-%H%M%S)" WINGMAN_BASE="main" \
+          WINGMAN_REVIEW_FILE="$RT" WINGMAN_EXEMPTIONS_FILE="" WINGMAN_CONVERGENCE_FILE=".reviews/_convergence.json" \
+          python3 /tmp/payload.py
+          python3 -c "import json; d=json.load(open('$RT')); assert d['reviewer']['tool']=='gemini', d['reviewer']; print('reviewer.tool ok')"
           echo "::endgroup::"
 
           echo "All install-smoke scenarios passed."
