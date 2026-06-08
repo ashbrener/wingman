@@ -143,8 +143,8 @@ before the hook is modified.
 - [x] T034 Enforce packaging boundary (FR-019/D9): gitignore `.specify/` and the spec-kit `CLAUDE.md`; `git rm --cached --ignore-unmatch .specify/feature.json`; confirm `.env` stays ignored.
 - [x] T035 Run `quickstart.md` end-to-end mentally/locally: the documented install + reviewer-selection steps match the shipped behavior.
 - [x] T036 Full verification gate: `claude plugin validate . --strict`; `shellcheck --severity=error` (install.sh + pre-push.sample); `bash -n` both; `py_compile` both heredocs; full `install-smoke`.
-- [ ] T037 Confirm only marketplace-relevant paths are staged (no `.specify/`, `CLAUDE.md`, `.env`); push `feat/marketplace-plugin`; open PR to `main` with summary + verification evidence.
-- [ ] T038 After CI is green and the PR merges, hand off the manual marketplace submission (`claude.ai/settings/plugins/submit`) with the ready-to-paste blurb.
+- [x] T037 Confirm only marketplace-relevant paths are staged (no `.specify/`, `CLAUDE.md`, `.env`); push `feat/marketplace-plugin`; open PR to `main` with summary + verification evidence.
+- [x] T038 After CI is green and the PR merges, hand off the manual marketplace submission (`claude.ai/settings/plugins/submit`) with the ready-to-paste blurb.
 
 ---
 
