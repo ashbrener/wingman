@@ -1,12 +1,12 @@
 # Wingman
 
-**The code review tool that deletes its own findings.** A different AI model
-reviews your diff on every push — then every finding you accept is encoded back
-into your project's rules and linter config, so the same mistake can't recur.
-Reviews trend toward empty. Wingman makes itself progressively unnecessary.
+**A second pair of eyes from a model that didn't write your code.** On every
+push, a different AI (codex, gemini, or claude) reviews your diff and hands you a
+findings table to act on — nothing blocks the push. Fixes you accept get written
+back into your project's rules and linter config, so the same issue never comes
+back.
 
-Other tools review. Wingman *learns* — cross-model review + write-back +
-convergence tracking in one pre-push loop.
+Cross-model review + a learning loop + convergence tracking, in one pre-push hook.
 
 ## Why cross-model?
 
