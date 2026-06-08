@@ -1,0 +1,12 @@
+{
+  "name": "wingman",
+  "description": "Wingman — cross-model code review that learns from every review and makes itself progressively unnecessary.",
+  "owner": { "name": "Ash Brener", "url": "https://github.com/ashbrener" },
+  "plugins": [
+    {
+      "name": "wingman",
+      "source": "./",
+      "description": "Cross-model code review that learns from every review and makes itself progressively unnecessary."
+    }
+  ]
+}

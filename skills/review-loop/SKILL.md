@@ -1,11 +1,13 @@
 ---
 name: review-loop
-description: Run Codex cross-model review, categorize findings, fix issues, and encode learned patterns into project rules
+description: Run cross-model review, categorize findings, fix issues, and encode learned patterns into project rules
 ---
 
 # Wingman: Review Loop
 
-Run the full review feedback loop: review code with Codex, present findings for user decision, fix issues, and encode learned patterns so they don't recur.
+Run the full review feedback loop: review code with the configured reviewer
+(`WINGMAN_REVIEWER`, default `codex`), present findings for user decision, fix
+issues, and encode learned patterns so they don't recur.
 
 ## Protocol: auto-surface after push
 
@@ -32,8 +34,8 @@ step the developer has to remember.
 Check `.reviews/` for files with `"status": "needs_categorization"`.
 
 If uncategorized findings exist, use those. If none exist (or `.reviews/` is empty), run a fresh review:
-- Use `/codex:rescue` to request a structured code review of the diff between the current branch and main
-- Ask Codex to report: line number, category (lint/logic/architecture/security), severity (critical/high/medium/low), and a one-line description for each finding
+- Run the configured reviewer (`WINGMAN_REVIEWER`, default `codex`) to review the diff between the current branch and `main`. For codex, use `/codex:rescue` or `codex review`; for gemini/claude the pre-push hook constructs the prompt automatically (or invoke the CLI directly with the same instructions).
+- Ask the reviewer to report, per finding: line number, category (lint/logic/architecture/security), severity (critical/high/medium/low), and a one-line description.
 - Save the output to `.reviews/<timestamp>-<branch>.json` in the standard format
 
 ### Review file shape (`wingman_schema_version: "2"`)
@@ -45,8 +47,8 @@ If uncategorized findings exist, use those. If none exist (or `.reviews/` is emp
   "timestamp": "2026-04-27-104051",
   "base": "main",                 // git base used for the diff (WINGMAN_BASE)
   "reviewer": {
-    "tool": "codex",
-    "tool_version": "0.121.0",    // codex CLI version
+    "tool": "codex",              // reflects WINGMAN_REVIEWER (codex|gemini|claude)
+    "tool_version": "0.121.0",    // reviewer CLI version
     "model": "gpt-5.5",           // model that did the review
     "provider": "openai",
     "reasoning_effort": "medium",

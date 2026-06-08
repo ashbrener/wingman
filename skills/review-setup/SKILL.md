@@ -10,13 +10,22 @@ Install the Wingman review feedback loop into the current project.
 ## Prerequisites
 
 Before running setup, verify:
-1. `codex` CLI is installed and authenticated (`codex --version`)
-2. The codex-plugin-cc Claude Code plugin is installed (`/codex:setup` works)
-3. The project is a git repository
+1. The project is a git repository.
+2. A reviewer CLI is available. Wingman defaults to `codex` but supports any of
+   `codex | gemini | claude` via the `WINGMAN_REVIEWER` environment variable or a
+   `.wingman-reviewer` repo file. The reviewer should be a **different model than
+   the one writing the code** — that cross-model second opinion is the value.
 
-If any prerequisite is missing, inform the user and provide installation instructions:
+Detect which reviewer CLIs are present (`command -v codex`, `command -v gemini`,
+`command -v claude`) and report them. If the user's chosen reviewer is missing,
+print its install hint and continue — setup must NOT block on a missing reviewer
+(the hook degrades gracefully, writing a `reviewer_missing` review file rather
+than failing the push):
 - Codex CLI: `npm install -g @openai/codex`
-- Codex plugin: `/plugin marketplace add openai/codex-plugin-cc` then `/plugin install codex@openai-codex`
+- Gemini CLI / Claude CLI: install per their official instructions.
+
+Note: choosing `claude` while Claude wrote the code still works, but it isn't a
+true cross-model opinion — prefer `codex` or `gemini` when Claude is the author.
 
 ## What to install
 
@@ -39,6 +48,21 @@ chmod +x .git/hooks/pre-push
 ```
 
 The block detects with marker comment `# --- Wingman: Codex review (non-blocking) ---` so re-installation is idempotent. Make the hook executable with `chmod +x`.
+
+### 1b. Persist the chosen reviewer (optional)
+
+Ask the user which reviewer to use (default `codex`; options `codex | gemini |
+claude` — prefer a different model than the code's author). If they pick a
+non-default, write the bare reviewer name to a `.wingman-reviewer` file at the
+repo root:
+
+```bash
+echo gemini > .wingman-reviewer
+```
+
+The hook resolves the reviewer as: `WINGMAN_REVIEWER` env var → `.wingman-reviewer`
+file → `codex`. The file holds no secret and is safe to commit so collaborators
+inherit the default. A per-push override is always available via the env var.
 
 ### 2. Reviews directory
 

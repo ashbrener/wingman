@@ -1,8 +1,12 @@
 # Wingman
 
-Cross-model code review feedback loop that learns from every review and makes itself progressively unnecessary.
+**The code review tool that deletes its own findings.** A different AI model
+reviews your diff on every push — then every finding you accept is encoded back
+into your project's rules and linter config, so the same mistake can't recur.
+Reviews trend toward empty. Wingman makes itself progressively unnecessary.
 
-Wingman gets a second opinion on your code from a different AI model, then feeds findings back into your project's rules and linter config so the same mistakes never recur.
+Other tools review. Wingman *learns* — cross-model review + write-back +
+convergence tracking in one pre-push loop.
 
 ## Why cross-model?
 
@@ -14,17 +18,28 @@ Wingman ships with [Codex](https://github.com/openai/codex) as the default revie
 
 ## Install
 
+**As a Claude Code plugin (recommended):**
+
 ```bash
-npx skills add ashbrener/wingman
+/plugin marketplace add ashbrener/wingman
+/plugin install wingman
+/wingman:review-setup
 ```
 
-This installs three skills into your AI coding agent:
+**As skills for any agent (45+ supported):**
 
-| Skill | Command | Purpose |
-|---|---|---|
-| `review-setup` | `/review-setup` | Install git hook, `.reviews/` dir, and patterns rule file |
-| `review-loop` | `/review-loop` | Review → categorize → fix → encode learned patterns |
-| `review-retro` | `/review-retro` | Weekly retrospective — trends, pruning, automation recs |
+```bash
+npx skills add ashbrener/wingman
+/review-setup
+```
+
+Either way you get three review capabilities:
+
+| Skill | Plugin command | Skills-CLI command | Purpose |
+|---|---|---|---|
+| `review-setup` | `/wingman:review-setup` | `/review-setup` | Install git hook, `.reviews/` dir, and patterns rule file |
+| `review-loop` | `/wingman:review-loop` | `/review-loop` | Review → categorize → fix → encode learned patterns |
+| `review-retro` | `/wingman:review-retro` | `/review-retro` | Weekly retrospective — trends, pruning, automation recs |
 
 ## Quick start
 
@@ -80,8 +95,9 @@ The pre-push hook honors two optional environment variables. Both have sensible 
 
 | Var | Default | Effect |
 |---|---|---|
+| `WINGMAN_REVIEWER` | `codex` | Which reviewer CLI runs: `codex`, `gemini`, or `claude`. Pick a **different model than the one that wrote the code** — that's where cross-model value comes from. Resolution: this env var → a `.wingman-reviewer` repo file → `codex`. A missing/unknown reviewer CLI writes a `reviewer_missing` record instead of blocking the push. (Choosing `claude` in a Claude-authored repo still runs, with a note suggesting a different model.) |
 | `WINGMAN_BASE` | `main` | Git base used for the review diff. Set to a feature-branch fix-commit SHA to review only the round-N delta — much faster than re-reviewing the whole branch each round. |
-| `WINGMAN_MODEL` | _(unset)_ — codex CLI's own latest | Pin a specific codex model (e.g. `gpt-5.5`). Leave unset for always-latest behavior; codex picks whichever model its CLI version supports. |
+| `WINGMAN_MODEL` | _(unset)_ — the reviewer CLI's own latest | Pin a specific model for the selected reviewer (e.g. `gpt-5.5`). Leave unset for always-latest behavior; each reviewer CLI picks whichever model it supports. |
 
 Examples:
 
