@@ -1,2 +1,14 @@
 node_modules/
 .DS_Store
+
+# Wingman review data
+.reviews/*.json
+.reviews/_convergence.json
+
+# Local secrets — never commit
+.env
+.env.local
+
+# Local spec-kit / linear dev tooling — not part of the published plugin
+.specify/
+CLAUDE.md
