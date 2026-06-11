@@ -68,13 +68,22 @@ npx skills add ashbrener/wingman -a <agent>     # specific agent only
 
 ### Upgrades
 
-The Wingman block in your `pre-push` hook carries a `# wingman-hook-version: N` stamp (currently `3`). Re-running the installer — `bash scripts/install.sh`, `npx skills add ashbrener/wingman`, or `/review-setup` — compares the installed version against the version shipped in the pack:
+Wingman has **two things that version independently**:
+
+- **The plugin / skills** (Claude Code) — updated via `/plugin update wingman` when the plugin `version` is bumped. Community-marketplace installs pick this up automatically: the catalog re-pins on each release and syncs nightly.
+- **The `pre-push` hook** (installed in each repo) — updated by re-running setup. **Updating the plugin does _not_ touch an already-installed hook** — re-run `/wingman:review-setup` in the repo to upgrade it. (The `review-loop` skill also warns you when your hook is behind.)
+
+The Wingman block in your `pre-push` hook carries a `# wingman-hook-version: N` stamp (currently `4`). Re-running the installer — `/wingman:review-setup`, `bash scripts/install.sh`, or `npx skills add ashbrener/wingman` — compares the installed version against the version shipped in the pack:
 
 - **older installed** → strips the old block and appends the new one (in-place upgrade)
 - **same version** → skips, leaves the hook untouched
 - **`--force` / `--reinstall`** → unconditionally replaces the block (use this when you want to force a re-stamp without bumping the version, e.g. recovering from a hand-edited hook)
 
-This means bug fixes to the hook propagate automatically the next time you re-run setup. Pre-v2 installs (no version stamp) are treated as v1 and upgraded. v2 installs are upgraded to v3 in place.
+This means bug fixes to the hook propagate the next time you re-run setup. Any older install — no stamp (treated as v1), v2, or v3 — is upgraded to v4 in place, leaving exactly one Wingman block and preserving your `.reviews/` data.
+
+#### What's new in v4
+
+Pluggable reviewer — `WINGMAN_REVIEWER` selects who reviews: `codex` (default), `gemini`, or `claude`. The codex path is unchanged; gemini/claude get a constructed diff plus a uniform `[P1/P2/P3]` prompt so the rest of the loop is reviewer-neutral. A missing or unknown reviewer writes a `reviewer_missing` record instead of blocking the push, and choosing `claude` in a Claude-authored repo adds a non-blocking cross-model note. See the `WINGMAN_REVIEWER` row under [Configuration](#configuration).
 
 #### What's new in v3
 
