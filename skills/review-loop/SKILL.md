@@ -29,6 +29,26 @@ finishes ~60-120 seconds later. The agent MUST:
 This makes the review an ambient part of the push flow, not a manual
 step the developer has to remember.
 
+## Hook version check (drift detection)
+
+<!-- CURRENT_HOOK_VERSION: keep in sync with the wingman-hook-version stamp in assets/pre-push.sample -->
+
+The current Wingman hook version is **4**. Before gathering findings, read the
+installed `pre-push` hook (the file containing the `# --- Wingman: Codex review`
+marker — check `git config core.hooksPath`, then `.git-hooks/`, `.githooks/`,
+`.husky/`, `.git/hooks/`) and find its `# wingman-hook-version: N` stamp.
+
+If `N` is missing or **less than 4**, surface a one-line, non-blocking notice
+before continuing:
+
+> ⚠️ Your Wingman hook is v`N` (latest is v4). Run `/wingman:review-setup` to
+> upgrade — it's in-place, keeps exactly one hook block, and preserves your
+> `.reviews/` data.
+
+Then proceed normally — never block the review on a stale hook. (Updating the
+Wingman plugin does not update the git hook; this is the reminder to re-run
+setup.)
+
 ## Step 1: Gather findings
 
 Check `.reviews/` for files with `"status": "needs_categorization"`.
