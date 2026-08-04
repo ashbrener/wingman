@@ -11,6 +11,8 @@ issues, and encode learned patterns so they don't recur.
 
 ## Protocol: auto-surface after push
 
+(Skipped entirely when `WINGMAN_MODE=off` — see Posture below.)
+
 Whenever the agent runs `git push` in a repo that has Wingman installed
 (detectable by the presence of the `# --- Wingman: Codex review` marker
 in the repo's `pre-push` hook), the review runs in the background and
@@ -28,6 +30,33 @@ finishes ~60-120 seconds later. The agent MUST:
 
 This makes the review an ambient part of the push flow, not a manual
 step the developer has to remember.
+
+## Posture: advisory, and staged by project maturity
+
+**Wingman review NEVER blocks a merge and NEVER blocks a push.** Findings are
+information for the author. What blocks is the project's own verification gate
+(lint / typecheck / tests) — fast, deterministic, and about things that actually
+break. A review that is still running, or that found something, is not a reason
+to hold a merge.
+
+Review INTENSITY is set by `WINGMAN_MODE` (env var → a `.wingman-mode` repo file
+→ default `advisory`), because an exhaustive loop kills traction on young code:
+
+| Mode | When | Behavior |
+|---|---|---|
+| `off` | Early — pre-users, iterating fast | Skip review entirely. Say so once per session; never nag. |
+| `advisory` *(default)* | Maturing — real consumers, shipping | ONE round per PR. Surface findings, fix what's cheap and obviously right, record the rest, move on. |
+| `strict` | Mature — artifacts that propagate to other repos, destructive paths, security surfaces | Round per push, converging while findings keep landing. Still advisory: the author decides when to stop. |
+
+Whatever the mode, look harder at findings in **destructive paths** (delete /
+overwrite / migrate), **artifacts this repo stamps into other repos** (a defect
+there propagates and needs a re-stamp to retract), and **credentials or `.env`
+handling**. Those are worth a follow-up before shipping even when everything
+else is deferred.
+
+Findings you don't fix are **recorded, not owed**: write them to the project's
+review-patterns file with a one-line rationale and land follow-ups in follow-up
+PRs. A deferral is an audit trail, not debt blocking the merge.
 
 ## Hook version check (drift detection)
 

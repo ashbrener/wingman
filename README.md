@@ -104,6 +104,7 @@ The pre-push hook honors two optional environment variables. Both have sensible 
 
 | Var | Default | Effect |
 |---|---|---|
+| `WINGMAN_MODE` | `advisory` | Review INTENSITY, staged by project maturity: `off` (early — pre-users, iterating: skip review entirely), `advisory` (maturing — one round per PR, fix what's cheap, record the rest), `strict` (mature — round per push where artifacts propagate to other repos or paths are destructive). Resolution: this env var → a `.wingman-mode` repo file → `advisory`. **No mode blocks a merge or a push** — what blocks is your own lint/typecheck/test gate. |
 | `WINGMAN_REVIEWER` | `codex` | Which reviewer CLI runs: `codex`, `gemini`, or `claude`. Pick a **different model than the one that wrote the code** — that's where cross-model value comes from. Resolution: this env var → a `.wingman-reviewer` repo file → `codex`. A missing/unknown reviewer CLI writes a `reviewer_missing` record instead of blocking the push. (Choosing `claude` in a Claude-authored repo still runs, with a note suggesting a different model.) |
 | `WINGMAN_BASE` | `main` | Git base used for the review diff. Set to a feature-branch fix-commit SHA to review only the round-N delta — much faster than re-reviewing the whole branch each round. |
 | `WINGMAN_MODEL` | _(unset)_ — the reviewer CLI's own latest | Pin a specific model for the selected reviewer (e.g. `gpt-5.5`). Leave unset for always-latest behavior; each reviewer CLI picks whichever model it supports. |
