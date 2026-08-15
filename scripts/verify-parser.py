@@ -113,6 +113,14 @@ def main() -> int:
     ok &= check("no false positives", found == [], str(found))
     ok &= check("counts are zero", counts(ns, raw) == (0, 0, 0), str(counts(ns, raw)))
 
+    # Regression (found by the first real end-to-end run): a reviewer quoting
+    # a DIFF must not manufacture findings — "+path | logic | high | ..." is a
+    # diff-added line, not a report. Diff markers are not filenames.
+    raw = (FIXTURES / "diff-quoted.txt").read_text()
+    print("diff-quoted.txt (diff markers are not filenames)")
+    found = ns["_parse_findings"](raw)
+    ok &= check("no findings from quoted diff lines", found == [], str([f["file"] for f in found]))
+
     print("\nverify-parser:", "OK" if ok else "FAILED")
     return 0 if ok else 1
 

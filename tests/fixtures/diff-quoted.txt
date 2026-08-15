@@ -1,0 +1,10 @@
+## Notes
+
+The change adds a fixture file whose contents are themselves finding-shaped.
+A reviewer quoting the diff must not manufacture findings from it:
+
++src/ingestion/services/deal_fields.py:23 | logic | high | quoted from the diff, not a finding
+-src/ingestion/services/old_module.py:9 | security | critical | a removed line, also not a finding
++tests/fixtures/incident-native.txt | lint | low | the fixture itself being added
+
+Real findings appear unprefixed, as in the incident fixture.

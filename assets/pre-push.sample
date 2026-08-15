@@ -417,8 +417,13 @@ _SEVERITY_TO_PRIORITY = {"critical": "P1", "high": "P1", "medium": "P2", "low": 
 # The closed category AND severity vocabularies are the qualifying test: prose
 # in a "## Notes" section routinely contains pipes and paths, and a shape-only
 # match would manufacture findings. Description may itself contain pipes.
+# The file component must LOOK like a path: it may carry a markdown list
+# marker ("- ", "* ") but never a diff marker ("+path" / "-path" with no
+# space). Without this, a reviewer quoting a diff hunk of a file that itself
+# contains finding-shaped lines manufactures findings — caught by the first
+# real end-to-end run of this very change (tests/fixtures/diff-quoted.txt).
 _FINDING_LINE = re.compile(
-    r"^\s*(?P<file>[^\s|][^|]*?)"
+    r"^[ \t]*(?:[-*][ \t]+)?(?P<file>[A-Za-z0-9._/~][^|]*?)"
     r"(?::(?P<line>\d+))?\s*\|"
     r"\s*(?P<category>lint|logic|architecture|security)\s*\|"
     r"\s*(?P<severity>critical|high|medium|low)\s*\|"
