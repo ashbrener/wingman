@@ -47,6 +47,9 @@ jobs:
           cat /tmp/extracted.py
           echo "-----------------------------------------"
 
+      - name: verify finding parser against recorded fixtures
+        run: python3 scripts/verify-parser.py
+
       - name: py_compile payload heredoc
         run: python3 -c "import py_compile; py_compile.compile('/tmp/extracted.py', doraise=True)"
 

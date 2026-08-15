@@ -1,0 +1,5 @@
+- [P1] Guard every registry path component before writing — src/commands/upgrade_dispatch.py:693
+  When .specify is a symlink, target.is_symlink() is false but the write escapes the sibling.
+
+- [P2] Do not record preserved skills as current — src/services/scaffold/arc_skills.py:183
+  Recording the render as delivered falsely attests content that was never written.

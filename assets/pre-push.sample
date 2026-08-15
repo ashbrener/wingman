@@ -1,5 +1,5 @@
 # --- Wingman: Codex review (non-blocking) ---
-# wingman-hook-version: 4
+# wingman-hook-version: 5
 # Runs codex review in background after push on feature branches.
 # Push proceeds immediately — findings saved to .reviews/ for /review-loop.
 #
@@ -16,7 +16,7 @@
 #                        reviewer CLI's own latest model)
 #   WINGMAN_EXEMPTIONS   path to a YAML exemption file     (default: <repo>/.wingman-exemptions.yaml)
 #
-# Output JSON shape: wingman_schema_version "3" — see scripts/migrate-reviews.py
+# Output JSON shape: wingman_schema_version "4" — see scripts/migrate-reviews.py
 # in the wingman repo to upgrade older review files. v3 adds:
 #   - "ci_status"      object summarising `gh pr checks` for the branch's PR
 #   - "convergence"    object summarising round-tracking + stop-rule signals
@@ -25,6 +25,14 @@
 #     stop-rule is met, or when the same finding ID stagnates across rounds
 #
 # History:
+#   v5 (schema 4) — parse findings at EMIT time into "parsed_findings", and
+#        derive p1/p2/p3 from that parse max'd with the legacy grep. v4 made
+#        the reviewer pluggable and codex kept its NATIVE pipe-shaped output,
+#        while the counter still recognised only the [P1] contract used by the
+#        constructed gemini/claude prompts — so every codex review counted 0,
+#        the stop-rule fired on round one, and the convergence notice advised
+#        declaring convergence while real findings sat unread. Found live
+#        across four arcs, 2026-08-15. See specs/002-emit-time-finding-parse.
 #   v4 — pluggable reviewer (WINGMAN_REVIEWER = codex|gemini|claude). codex
 #        keeps its native `codex review`; gemini/claude get a constructed
 #        diff+prompt (uniform [P1/P2/P3] output contract) piped via stdin.
@@ -395,14 +403,68 @@ if ci_raw:
         )
 
 # --- v3 Feature 3: Round-tracking + convergence detection --------------
-def _count_pri(text, tag):
-    # Match "[P1] ", "[P2] ", "P1:", "P1 -", "Priority 1", etc.
-    pat = rf"(?:^|\n)\s*(?:\[?{tag}\]?[\s:.\-]|Priority\s*{tag[1]}\b)"
-    return len(re.findall(pat, text, flags=re.IGNORECASE))
+# --- BEGIN finding parser (verified by scripts/verify-parser.py) ---
+# codex keeps its NATIVE `codex review` output — one line per finding as
+#   <file>[:<line>] | <category> | <severity> | <description>
+# while only the CONSTRUCTED gemini/claude prompt uses the legacy [P1/P2/P3]
+# contract. Counting only the legacy shape meant every codex review scored
+# zero, the stop-rule fired on round one, and the convergence notice told the
+# author to stop while real findings sat unread in raw_review (found live
+# across four arcs, 2026-08-15). Both shapes are parsed; counts take whichever
+# is truthful, so no single format change can blind the signal again.
+_SEVERITY_TO_PRIORITY = {"critical": "P1", "high": "P1", "medium": "P2", "low": "P3"}
 
-p1_count = _count_pri(raw, "P1")
-p2_count = _count_pri(raw, "P2")
-p3_count = _count_pri(raw, "P3")
+# The closed category AND severity vocabularies are the qualifying test: prose
+# in a "## Notes" section routinely contains pipes and paths, and a shape-only
+# match would manufacture findings. Description may itself contain pipes.
+_FINDING_LINE = re.compile(
+    r"^\s*(?P<file>[^\s|][^|]*?)"
+    r"(?::(?P<line>\d+))?\s*\|"
+    r"\s*(?P<category>lint|logic|architecture|security)\s*\|"
+    r"\s*(?P<severity>critical|high|medium|low)\s*\|"
+    r"\s*(?P<description>\S.*?)\s*$",
+    re.IGNORECASE,
+)
+
+
+def _parse_findings(text):
+    """Findings the reviewer reported, in the native line shape."""
+    out = []
+    for _line in text.splitlines():
+        m = _FINDING_LINE.match(_line)
+        if not m:
+            continue
+        _sev = m.group("severity").lower()
+        out.append({
+            "file": m.group("file").strip(),
+            "line": int(m.group("line")) if m.group("line") else None,
+            "category": m.group("category").lower(),
+            "severity": _sev,
+            "priority": _SEVERITY_TO_PRIORITY[_sev],
+            "description": m.group("description").strip(),
+        })
+    return out
+
+
+def _count_pri(text, tag):
+    # Legacy shape: "[P1] ", "[P2] ", "P1:", "P1 -", "Priority 1", etc.
+    # The optional list-marker prefix matters: reviewers routinely emit
+    # "- [P1] ..." as a markdown bullet, and without it this counter missed
+    # every bulleted finding — the same zero-count blindness as the native
+    # shape, one line up. Verified by tests/fixtures/legacy-priority.txt.
+    pat = (
+        rf"(?:^|\n)[ \t]*(?:[-*+]\s+)?"
+        rf"(?:\[?{tag}\]?[\s:.\-]|Priority\s*{tag[1]}\b)"
+    )
+    return len(re.findall(pat, text, flags=re.IGNORECASE))
+# --- END finding parser ---
+
+parsed_findings = _parse_findings(raw)
+# MAX, not sum: a review carrying both shapes must not inflate, and neither
+# shape may zero the other.
+p1_count = max(len([f for f in parsed_findings if f["priority"] == "P1"]), _count_pri(raw, "P1"))
+p2_count = max(len([f for f in parsed_findings if f["priority"] == "P2"]), _count_pri(raw, "P2"))
+p3_count = max(len([f for f in parsed_findings if f["priority"] == "P3"]), _count_pri(raw, "P3"))
 # Synthetic CI-red findings count toward P1 too — they're prepended later.
 p1_count += len([s for s in synthetic_findings if s.startswith("[P1]")])
 
@@ -414,6 +476,11 @@ for m in re.finditer(r"\[P[123]\]\s+([A-Za-z0-9][\w\-./:]+)", raw):
     finding_ids.append(m.group(1))
 for m in re.finditer(r"(?:^|\n)\s*Finding\s+([A-Za-z0-9][\w\-./:]+)", raw):
     finding_ids.append(m.group(1))
+# A parsed finding's identity is its location — stable across rounds and
+# present even when the reviewer emits no "[P1] <id>" prefix (appended to,
+# never replacing, the heuristics above).
+for _f in parsed_findings:
+    finding_ids.append(_f["file"] if _f["line"] is None else "{}:{}".format(_f["file"], _f["line"]))
 finding_ids = sorted(set(finding_ids))
 
 ledger_path = os.environ["WINGMAN_CONVERGENCE_FILE"]
@@ -534,7 +601,7 @@ if raw.startswith("WINGMAN_REVIEWER_MISSING"):
     status = "reviewer_missing"
 
 data = {
-    "wingman_schema_version": "3",
+    "wingman_schema_version": "4",
     "branch": os.environ["WINGMAN_BRANCH"],
     "timestamp": os.environ["WINGMAN_TIMESTAMP"],
     "base": os.environ["WINGMAN_BASE"],
@@ -562,6 +629,11 @@ data = {
     "synthetic_findings": synthetic_findings,
     "notices": notices,
     "raw_review": prepended,
+    # Machine-parsed at emit time. NEVER categorized — categorization is
+    # /review-loop's job and lands in "findings" below. A reader asking
+    # "what did the reviewer find" reads THIS; "findings" stays empty until
+    # each item is routed, so an empty "findings" never means "clean".
+    "parsed_findings": parsed_findings,
     "findings": [],
     "resolutions": [],
     "status": status,

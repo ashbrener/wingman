@@ -1,0 +1,12 @@
+NO FINDINGS
+
+## Notes
+
+The diff touches src/pipeline/router.py | the table below summarises the flow:
+
+| stage | owner | notes |
+| ingest | backend | unchanged in this diff |
+| rerank | search | see docs/RETRIEVAL.md for the ordering rules |
+
+Nothing here is a defect; the pipe characters above are table syntax, and
+paths like src/app/main.py:120 appear in prose without being findings.
