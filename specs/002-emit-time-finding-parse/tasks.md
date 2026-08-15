@@ -52,6 +52,12 @@ nobody counts, or counts with nothing parsed, is half a fix).
 - [X] T015 End-to-end on this branch: install the patched hook locally (`/review-setup` or a manual copy into `.git/hooks/pre-push`), push, and confirm — the push is NOT blocked, `.reviews/<stamp>-fix-emit-time-finding-parse.json` exists with `wingman_schema_version: "4"`, `parsed_findings` populated if the reviewer found anything, `findings: []`, and counts matching what the raw output actually says (SC-002, SC-006).
 - [X] T016 Confirm an artifact written by the previous version still loads through `scripts/migrate-reviews.py` and reads correctly (SC-007), using one of tonight's live v3/v2 files as the input.
 
+## Phase 6: Backfill the recorded backlog (FR-010a, SC-008)
+
+- [X] T017 Extend `scripts/migrate-reviews.py` to BACKFILL: locate the installed hook (honouring `core.hooksPath`, else `.git/hooks/pre-push`) for the repo owning the `.reviews/` directory, extract the anchored parser from it (the same single-source extraction the verifier uses), parse each artifact's `raw_review`, and populate `parsed_findings` plus recomputed `p1/p2/p3` counts and `stop_rule_met`. Preserve every other field byte-for-byte. Idempotent: a second run must change nothing.
+- [X] T018 Add `--dry-run` to the migration so an operator can see what a backfill would recover before writing, and print a per-file summary (`branch: N findings recovered`).
+- [X] T019 Verify backfill on COPIES of live artifacts from three repos before any in-place run; confirm idempotence by running twice.
+
 ---
 
 ## Dependencies

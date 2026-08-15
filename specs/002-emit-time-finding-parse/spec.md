@@ -95,6 +95,7 @@ A clean review reports clean. Ordinary prose that happens to contain the same pu
 - **FR-008**: A review reporting nothing MUST produce an honest zero, and prose MUST NOT be mistaken for findings — the recognised category and severity vocabularies are the qualifying test.
 - **FR-009**: Existing behaviours MUST be preserved: the hook never blocks a push, runs in the background, and continues to record missing-reviewer and continuous-integration-derived outcomes exactly as today.
 - **FR-010**: The artifact's version identifier MUST be raised, artifacts written by older versions MUST remain readable, and the documented upgrade path MUST cover the change.
+- **FR-010a**: The upgrade path MUST **backfill** older artifacts rather than stub them: the reviewer's raw output was captured correctly all along, so migrating an older artifact MUST parse it and populate the findings and the round counts from it. An empty findings list may only survive migration when the raw output genuinely contains none. Backfill MUST preserve every existing field, including the raw output, and MUST be re-runnable without changing an already-migrated artifact.
 - **FR-011**: The installed-copy version marker MUST be raised so existing installations upgrade through the normal setup path.
 - **FR-012**: No new dependency may be introduced.
 
@@ -115,6 +116,7 @@ A clean review reports clean. Ordinary prose that happens to contain the same pu
 - **SC-005**: Narrative prose containing pipe characters yields zero findings — no false positives.
 - **SC-006**: The push path remains non-blocking and its behaviour on a missing reviewer is unchanged.
 - **SC-007**: An artifact written by the previous version is still readable by the current tooling.
+- **SC-008**: Backfilling the recorded backlog recovers the findings that were reported but never counted — verified against the live set: every artifact whose raw output contains findings ends migration with a non-empty findings list and non-zero counts, and no artifact that was genuinely clean gains one.
 
 ## Assumptions
 
