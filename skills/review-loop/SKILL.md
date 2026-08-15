@@ -62,7 +62,7 @@ PRs. A deferral is an audit trail, not debt blocking the merge.
 
 <!-- CURRENT_HOOK_VERSION: keep in sync with the wingman-hook-version stamp in assets/pre-push.sample -->
 
-The current Wingman hook version is **4**. Before gathering findings, read the
+The current Wingman hook version is **5** (artifact schema 4). Before gathering findings, read the
 installed `pre-push` hook (the file containing the `# --- Wingman: Codex review`
 marker — check `git config core.hooksPath`, then `.git-hooks/`, `.githooks/`,
 `.husky/`, `.git/hooks/`) and find its `# wingman-hook-version: N` stamp.
@@ -79,6 +79,15 @@ Wingman plugin does not update the git hook; this is the reminder to re-run
 setup.)
 
 ## Step 1: Gather findings
+
+**Read `parsed_findings`, not `findings`.** `findings` is YOUR output — it is
+empty on every freshly emitted artifact, so an empty `findings` never means the
+review was clean. `parsed_findings` (schema 4+) is what the reviewer actually
+reported. On a pre-v4 artifact `parsed_findings` is absent or empty by
+construction: fall back to reading `raw_review` directly. The same applies to
+`convergence.p1_count` — before schema 4 those counts could read zero while
+findings existed, so never declare convergence from an old artifact's counts.
+
 
 Check `.reviews/` for files with `"status": "needs_categorization"`.
 
@@ -105,6 +114,10 @@ If uncategorized findings exist, use those. If none exist (or `.reviews/` is emp
     "wall_seconds": 87            // time codex spent generating the review
   },
   "raw_review": "...full codex output, kept for forensics...",
+  "parsed_findings": [            // machine-parsed AT EMIT TIME (schema 4+)
+    {"file": "src/x.py", "line": 23, "category": "logic",
+     "severity": "high", "priority": "P1", "description": "..."}
+  ],
   "findings": [],                 // populated by /review-loop categorization
   "resolutions": [],              // populated when fixes land
   "status": "needs_categorization"

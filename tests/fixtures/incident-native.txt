@@ -1,0 +1,3 @@
+src/ingestion/services/deal_fields.py:23 | logic | high | Changes to traffic_light_source or traffic_light_at are omitted from DECISION_FIELDS, so provenance-only changes produce no required audit event.
+src/ingestion/services/deal_fields.py:52 | logic | high | Reading the prior state before the transaction without locking permits concurrent writes to emit audit events with stale “from” values, breaking reconstructibility.
+src/ingestion/services/seeding.py:553 | logic | medium | Document creation commits before extraction and terminal transition, while retries skip any existing marker, so a mid-seed failure leaves a permanently pending incomplete document.

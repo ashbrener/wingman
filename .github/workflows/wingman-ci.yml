@@ -47,6 +47,9 @@ jobs:
           cat /tmp/extracted.py
           echo "-----------------------------------------"
 
+      - name: verify finding parser against recorded fixtures
+        run: python3 scripts/verify-parser.py
+
       - name: py_compile payload heredoc
         run: python3 -c "import py_compile; py_compile.compile('/tmp/extracted.py', doraise=True)"
 
@@ -69,7 +72,7 @@ jobs:
         run: python3 -c "import py_compile; py_compile.compile('/tmp/extracted-exempt.py', doraise=True)"
 
   install-smoke:
-    name: install-smoke (fresh / v1->v4 / v2->v4 / v3->v4 / --force / exemptions / convergence / reviewer.tool)
+    name: install-smoke (fresh / v1->v5 / v2->v5 / v3->v5 / --force / exemptions / convergence / reviewer.tool)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -113,7 +116,7 @@ jobs:
           "$WINGMAN_SRC/scripts/install.sh"
           HOOK=".git/hooks/pre-push"
           test -f "$HOOK" || { echo "hook missing"; exit 1; }
-          assert_contains "$HOOK" "# wingman-hook-version: 4"
+          assert_contains "$HOOK" "# wingman-hook-version: 5"
           assert_contains "$HOOK" "WINGMAN_REVIEW_INPUT"
           assert_contains "$HOOK" "WINGMAN_REVIEWER"
           assert_contains "$HOOK" "gemini|claude)"
@@ -134,7 +137,7 @@ jobs:
           echo "::endgroup::"
 
           # --- Scenario 2: v1 -> v3 upgrade ---
-          echo "::group::v1 -> v4 upgrade"
+          echo "::group::v1 -> v5 upgrade"
           rm -rf "$WORK" && WORK=$(mktemp -d) && cd "$WORK"
           git init -q -b main && git config user.email ci@e.com && git config user.name ci
           git commit -q --allow-empty -m init
@@ -149,7 +152,7 @@ jobs:
           assert_contains .git/hooks/pre-push 'REVIEW_OUTPUT="$REVIEW_OUTPUT"'
           assert_not_contains .git/hooks/pre-push "# wingman-hook-version: 3"
           "$WINGMAN_SRC/scripts/install.sh"
-          assert_contains .git/hooks/pre-push "# wingman-hook-version: 4"
+          assert_contains .git/hooks/pre-push "# wingman-hook-version: 5"
           assert_contains .git/hooks/pre-push "WINGMAN_REVIEW_INPUT"
           assert_not_contains .git/hooks/pre-push 'REVIEW_OUTPUT="$REVIEW_OUTPUT"'
           [ "$(count_blocks .git/hooks/pre-push)" = "1" ] || { echo "expected 1 block after upgrade"; exit 1; }
@@ -159,7 +162,7 @@ jobs:
           # Reproduces the upgrade path most users will hit: the v2 hook is
           # already installed (from the previous wingman release) and the
           # installer must strip-and-replace it in place.
-          echo "::group::v2 -> v4 upgrade"
+          echo "::group::v2 -> v5 upgrade"
           rm -rf "$WORK" && WORK=$(mktemp -d) && cd "$WORK"
           git init -q -b main && git config user.email ci@e.com && git config user.name ci
           git commit -q --allow-empty -m init
@@ -175,16 +178,16 @@ jobs:
           assert_not_contains .git/hooks/pre-push "# wingman-hook-version: 3"
           assert_not_contains .git/hooks/pre-push "WINGMAN_CONVERGENCE_FILE"
           "$WINGMAN_SRC/scripts/install.sh"
-          assert_contains .git/hooks/pre-push "# wingman-hook-version: 4"
+          assert_contains .git/hooks/pre-push "# wingman-hook-version: 5"
           assert_not_contains .git/hooks/pre-push "# wingman-hook-version: 2"
           assert_contains .git/hooks/pre-push "WINGMAN_CONVERGENCE_FILE"
           assert_contains .git/hooks/pre-push "WINGMAN_EXEMPTIONS_FILE"
-          [ "$(count_blocks .git/hooks/pre-push)" = "1" ] || { echo "expected 1 block after v2->v4 upgrade"; exit 1; }
+          [ "$(count_blocks .git/hooks/pre-push)" = "1" ] || { echo "expected 1 block after v2->v5 upgrade"; exit 1; }
           test -f .wingman-exemptions.yaml.sample || { echo "exemption sample not copied on upgrade"; exit 1; }
           echo "::endgroup::"
 
-          # --- Scenario 3b: v3 -> v4 upgrade (+ data preservation) ---
-          echo "::group::v3 -> v4 upgrade"
+          # --- Scenario 3b: v3 -> v5 upgrade (+ data preservation) ---
+          echo "::group::v3 -> v5 upgrade"
           rm -rf "$WORK" && WORK=$(mktemp -d) && cd "$WORK"
           git init -q -b main && git config user.email ci@e.com && git config user.name ci
           git commit -q --allow-empty -m init
@@ -204,10 +207,10 @@ jobs:
           _seed_a=$(cat .reviews/2026-01-01-000000-feat-x.json)
           _seed_b=$(cat .reviews/_convergence.json)
           "$WINGMAN_SRC/scripts/install.sh"
-          assert_contains .git/hooks/pre-push "# wingman-hook-version: 4"
+          assert_contains .git/hooks/pre-push "# wingman-hook-version: 5"
           assert_not_contains .git/hooks/pre-push "# wingman-hook-version: 3"
           assert_contains .git/hooks/pre-push "WINGMAN_REVIEWER"
-          [ "$(count_blocks .git/hooks/pre-push)" = "1" ] || { echo "expected 1 block after v3->v4 upgrade"; exit 1; }
+          [ "$(count_blocks .git/hooks/pre-push)" = "1" ] || { echo "expected 1 block after v3->v5 upgrade"; exit 1; }
           # Data preservation: prior review files untouched.
           test -f .reviews/2026-01-01-000000-feat-x.json || { echo "prior review file lost on upgrade"; exit 1; }
           [ "$(cat .reviews/2026-01-01-000000-feat-x.json)" = "$_seed_a" ] || { echo "review file mutated on upgrade"; exit 1; }
@@ -221,7 +224,7 @@ jobs:
           git commit -q --allow-empty -m init
           "$WINGMAN_SRC/scripts/install.sh"
           "$WINGMAN_SRC/scripts/install.sh" --force
-          assert_contains .git/hooks/pre-push "# wingman-hook-version: 4"
+          assert_contains .git/hooks/pre-push "# wingman-hook-version: 5"
           BLOCKS=$(count_blocks .git/hooks/pre-push)
           [ "$BLOCKS" = "1" ] || { echo "expected exactly 1 wingman block after --force, got $BLOCKS"; exit 1; }
           echo "::endgroup::"
