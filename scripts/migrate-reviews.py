@@ -215,6 +215,24 @@ def main() -> int:
     skipped = 0
     failed = 0
     for path in sorted(review_dir.glob("*.json")):
+        # NOT every .json in .reviews/ is a review artifact. `_convergence.json`
+        # is the round-tracking ledger ({branch, rounds[], convergence{}}) and
+        # any future underscore-prefixed file is likewise internal state.
+        # Reshaping one destroys it — caught after doing exactly that to a live
+        # ledger, 2026-08-15. Skip by name AND by shape: an artifact always
+        # carries `raw_review`.
+        if path.name.startswith("_"):
+            skipped += 1
+            continue
+        try:
+            probe = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            failed += 1
+            print(f"  failed:   {path} — {exc}", file=sys.stderr)
+            continue
+        if not isinstance(probe, dict) or "raw_review" not in probe:
+            skipped += 1
+            continue
         try:
             if migrate(path, parser_ns=parser_ns, dry_run=dry_run):
                 migrated += 1
