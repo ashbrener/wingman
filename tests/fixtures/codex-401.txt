@@ -1,0 +1,16 @@
+OpenAI Codex v0.135.0
+--------
+workdir: /Users/dev/Code/project
+model: gpt-5.5
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: medium
+reasoning summaries: none
+session id: 019f2c1a-7b44-7d10-9e3a-5c2f0d8e4a11
+--------
+user
+Review the diff against "main". ALSO audit any code paths
+whose touched files import from, or are imported by, the changed
+modules.
+ERROR: unexpected status 401 Unauthorized: Missing bearer or basic authentication in header

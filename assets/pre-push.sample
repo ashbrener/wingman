@@ -1,5 +1,5 @@
 # --- Wingman: Codex review (non-blocking) ---
-# wingman-hook-version: 5
+# wingman-hook-version: 6
 # Runs codex review in background after push on feature branches.
 # Push proceeds immediately — findings saved to .reviews/ for /review-loop.
 #
@@ -23,8 +23,30 @@
 #   - "exemptions"     array of exemption IDs passed into the codex prompt
 #   - synthetic findings prepended to "raw_review" when CI is RED, when the
 #     stop-rule is met, or when the same finding ID stagnates across rounds
+# hook v6 adds (schema unchanged, additive):
+#   - "review_outcome" {state: succeeded|failed|missing, reason, exit_status,
+#     counted}; status "review_failed"; ledger "uncounted_runs"
 #
 # History:
+#   v6 (schema 4) — a review that did not run is not a round. A missing
+#        reviewer CLI (reviewer_missing) or a reviewer that exited with an
+#        error (e.g. codex 401, not logged in) was still appended to
+#        _convergence.json as a zero-finding round — indistinguishable from a
+#        clean one — so two such pushes met the stop-rule and printed a
+#        convergence notice on a branch nobody had reviewed (a first push that
+#        failed with HTTP 401 was recorded as a clean round). The reviewer's
+#        exit status is now captured instead of discarded by `|| true`; each
+#        run is classified succeeded|failed|missing (review_outcome); failed
+#        and missing runs are logged under "uncounted_runs" and never touch
+#        "rounds", the stop-rule or the clean streak. Their artifacts are
+#        still written, marked review_failed / reviewer_missing, raw output
+#        kept. Also: `gh pr checks` prints valid JSON but exits 1 when a
+#        check fails (8 when pending), and the `|| fallback` replaced that
+#        JSON with an empty list — CI recorded as NONE, no synthetic red-CI
+#        P1, and a branch with failing CI could converge. Output and exit
+#        status are now captured separately; the JSON is used whenever it
+#        parses, with UNKNOWN only when there is no usable output.
+#        See specs/003-failed-review-not-a-round.
 #   v5 (schema 4) — parse findings at EMIT time into "parsed_findings", and
 #        derive p1/p2/p3 from that parse max'd with the legacy grep. v4 made
 #        the reviewer pluggable and codex kept its NATIVE pipe-shaped output,
@@ -70,7 +92,11 @@ if [[ "$WINGMAN_BRANCH" != "main" && "$WINGMAN_BRANCH" != "master" && "$WINGMAN_
 
     _wingman_run() {
         local _start _end _wall _review_file _exemptions_text _prompt_file _full_prompt_file
-        local _ci_status_file _ci_summary_file _pr_number
+        local _ci_status_file _ci_summary_file _pr_number _reviewer_exit _ci_raw _ci_rc
+        # The reviewer's exit status (v6). Empty when the CLI never ran
+        # (missing/unknown reviewer). It is the primary signal that a review
+        # FAILED — a failed run must never be counted as a convergence round.
+        _reviewer_exit=""
         _start=$(date +%s)
         _review_file=$(mktemp -t wingman-review.XXXXXX)
         _prompt_file=$(mktemp -t wingman-prompt.XXXXXX)
@@ -188,14 +214,18 @@ WINGMAN_EXEMPT_EOF
         else
             case "$WINGMAN_REVIEWER" in
                 codex)
+                    # If --prompt-file is rejected, retry without it; the exit
+                    # status recorded is the LAST attempt's (its output is the
+                    # one kept in _review_file).
+                    _reviewer_exit=0
                     if [ -n "${WINGMAN_MODEL:-}" ]; then
                         codex review -c "model=\"$WINGMAN_MODEL\"" --base "$WINGMAN_BASE" --prompt-file "$_prompt_file" >"$_review_file" 2>&1 \
                             || codex review -c "model=\"$WINGMAN_MODEL\"" --base "$WINGMAN_BASE" >"$_review_file" 2>&1 \
-                            || true
+                            || _reviewer_exit=$?
                     else
                         codex review --base "$WINGMAN_BASE" --prompt-file "$_prompt_file" >"$_review_file" 2>&1 \
                             || codex review --base "$WINGMAN_BASE" >"$_review_file" 2>&1 \
-                            || true
+                            || _reviewer_exit=$?
                     fi
                     ;;
                 gemini|claude)
@@ -214,19 +244,20 @@ WINGMAN_EXEMPT_EOF
                         echo "=== DIFF: git diff $WINGMAN_BASE...HEAD ==="
                         git diff "$WINGMAN_BASE"...HEAD 2>/dev/null
                     } > "$_full_prompt_file"
+                    _reviewer_exit=0
                     if [ "$WINGMAN_REVIEWER" = "gemini" ]; then
                         # gemini-cli reads the prompt from stdin (non-interactive).
                         if [ -n "${WINGMAN_MODEL:-}" ]; then
-                            gemini -m "$WINGMAN_MODEL" < "$_full_prompt_file" >"$_review_file" 2>&1 || true
+                            gemini -m "$WINGMAN_MODEL" < "$_full_prompt_file" >"$_review_file" 2>&1 || _reviewer_exit=$?
                         else
-                            gemini < "$_full_prompt_file" >"$_review_file" 2>&1 || true
+                            gemini < "$_full_prompt_file" >"$_review_file" 2>&1 || _reviewer_exit=$?
                         fi
                     else
                         # claude -p (print mode) reads the prompt from stdin.
                         if [ -n "${WINGMAN_MODEL:-}" ]; then
-                            claude -p --model "$WINGMAN_MODEL" < "$_full_prompt_file" >"$_review_file" 2>&1 || true
+                            claude -p --model "$WINGMAN_MODEL" < "$_full_prompt_file" >"$_review_file" 2>&1 || _reviewer_exit=$?
                         else
-                            claude -p < "$_full_prompt_file" >"$_review_file" 2>&1 || true
+                            claude -p < "$_full_prompt_file" >"$_review_file" 2>&1 || _reviewer_exit=$?
                         fi
                     fi
                     ;;
@@ -252,8 +283,21 @@ WINGMAN_EXEMPT_EOF
         if command -v gh >/dev/null 2>&1; then
             _pr_number=$(gh pr list --head "$WINGMAN_BRANCH" --json number --jq '.[0].number' 2>/dev/null || true)
             if [ -n "$_pr_number" ]; then
-                gh pr checks "$_pr_number" --json name,state,link --jq '.' \
-                    > "$_ci_status_file" 2>/dev/null || echo '{"state":"UNKNOWN","checks":[]}' > "$_ci_status_file"
+                # Output and exit status are captured SEPARATELY (v6): gh pr
+                # checks prints valid JSON but exits 1 when any check FAILS (8
+                # when any is pending). An `|| fallback` on the exit status
+                # threw away exactly the red-CI JSON this block exists for, so
+                # CI read NONE, the synthetic red-CI P1 vanished, and a branch
+                # with failing CI could converge. Use the JSON whenever it
+                # parses; fall back only when there is no usable output.
+                _ci_rc=0
+                _ci_raw=$(gh pr checks "$_pr_number" --json name,state,link --jq '.' 2>/dev/null) || _ci_rc=$?
+                if [ -n "$_ci_raw" ] \
+                    && printf '%s' "$_ci_raw" | python3 -c 'import json, sys; json.load(sys.stdin)' >/dev/null 2>&1; then
+                    printf '%s\n' "$_ci_raw" > "$_ci_status_file"
+                else
+                    echo "{\"state\":\"UNKNOWN\",\"checks\":[],\"gh_exit\":${_ci_rc}}" > "$_ci_status_file"
+                fi
             fi
         fi
 
@@ -286,6 +330,7 @@ WINGMAN_EXEMPT_EOF
         # python3 exec with E2BIG.
         WINGMAN_REVIEW_INPUT="$_review_file" \
         WINGMAN_TOOL="$_tool" \
+        WINGMAN_REVIEWER_EXIT="$_reviewer_exit" \
         WINGMAN_CI_STATUS_INPUT="$_ci_status_file" \
         WINGMAN_PR_NUMBER="$_pr_number" \
         WINGMAN_TOOL_VERSION="$_tool_version" \
@@ -488,6 +533,87 @@ for _f in parsed_findings:
     finding_ids.append(_f["file"] if _f["line"] is None else "{}:{}".format(_f["file"], _f["line"]))
 finding_ids = sorted(set(finding_ids))
 
+# --- v6: did the review actually run? ----------------------------------
+# A run that reviewed nothing scores 0 P1 / 0 P2 — exactly what a clean round
+# looks like — so before v6 a missing reviewer, or a codex 401 (not logged in),
+# was counted as a clean round and two of them met the stop-rule. Only a
+# SUCCEEDED review may be a round. The rule, first match wins:
+#   1. output starts with WINGMAN_REVIEWER_MISSING (CLI not on PATH, or an
+#      unknown reviewer name)                                  -> missing
+#   2. the reviewer exited non-zero (WINGMAN_REVIEWER_EXIT)     -> failed
+#   3. the output is empty                                      -> failed
+#   4. a reviewer-specific error signature starts one of the LAST few
+#      non-empty lines, AND the run reported no findings        -> failed
+#   5. otherwise                                                -> succeeded
+# Tail-only because codex's transcript quotes the diffs and files it read, so
+# an error-like phrase can appear mid-transcript in a good review; a failed
+# run ENDS in its error. Line-anchored so a quoted diff line (+/-/space) never
+# matches. Findings-free only, so a signature never discards real findings.
+# When in doubt this says "failed": an uncounted run only delays convergence
+# by one push, while a false round can fake it. See spec 003, research R-3.
+_REVIEW_TAIL_LINES = 5
+_REVIEW_FAILURE_SIGNATURES = {
+    "codex": [
+        r"^\s*(?:\[[^\]]*\]\s*)?ERROR:",
+        r"^.*\bunexpected status \d{3}\b",
+        r"^.*\b(?:401|403)\s+(?:Unauthorized|Forbidden)\b",
+        r"^\s*stream (?:error|disconnected)\b",
+        r"^.*\bexceeded retry limit\b",
+        r"^.*\bnot logged in\b",
+        r"^.*\bcodex login\b",
+        r"^.*\busage limit\b",
+    ],
+    "claude": [
+        r"^\s*Invalid API key\b",
+        r"^.*\bPlease run /login\b",
+        r"^\s*API Error\b",
+        r"^.*\bCredit balance is too low\b",
+        r"^\s*Error:",
+        r"^.*\bnot logged in\b",
+    ],
+    "gemini": [
+        r"^\s*\[API Error\b",
+        r"^\s*Error:",
+        r"^\s*Error when talking to Gemini API\b",
+        r"^.*\bPlease set an Auth method\b",
+        r"^.*\bAPI key not valid\b",
+        r"^.*\bGEMINI_API_KEY\b",
+        r"^.*\bQuota exceeded\b",
+        r"^.*\bnot logged in\b",
+    ],
+}
+
+
+def _classify_review(text, tool, exit_status, found_anything):
+    """(state, reason) — state is succeeded | failed | missing."""
+    if text.startswith("WINGMAN_REVIEWER_MISSING"):
+        return "missing", text.splitlines()[0].split(":", 1)[-1].strip()
+    if exit_status is not None and exit_status != 0:
+        return "failed", "reviewer exited with status {}".format(exit_status)
+    if not text.strip():
+        return "failed", "reviewer produced no output"
+    if not found_anything:
+        tail = [ln for ln in text.splitlines() if ln.strip()][-_REVIEW_TAIL_LINES:]
+        for pat in _REVIEW_FAILURE_SIGNATURES.get(tool, []):
+            for ln in tail:
+                if re.match(pat, ln, flags=re.IGNORECASE):
+                    return "failed", "reviewer error: {}".format(ln.strip()[:200])
+    return "succeeded", None
+
+
+_exit_raw = (os.environ.get("WINGMAN_REVIEWER_EXIT") or "").strip()
+try:
+    reviewer_exit = int(_exit_raw) if _exit_raw else None
+except ValueError:
+    reviewer_exit = None
+review_state, review_reason = _classify_review(
+    raw,
+    os.environ.get("WINGMAN_TOOL") or "codex",
+    reviewer_exit,
+    bool(parsed_findings) or any(_count_pri(raw, t) for t in ("P1", "P2", "P3")),
+)
+review_counted = review_state == "succeeded"
+
 ledger_path = os.environ["WINGMAN_CONVERGENCE_FILE"]
 ledger = {"branch": os.environ["WINGMAN_BRANCH"], "rounds": [], "convergence": {}}
 if os.path.isfile(ledger_path):
@@ -503,65 +629,89 @@ if os.path.isfile(ledger_path):
     except (OSError, json.JSONDecodeError):
         pass
 
-round_number = len(ledger["rounds"]) + 1
-new_round = {
-    "round": round_number,
-    "timestamp": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-    "review_file": os.path.basename(os.environ["WINGMAN_REVIEW_FILE"]),
-    "p1_count": p1_count,
-    "p2_count": p2_count,
-    "p3_count": p3_count,
-    "ci_status": ci_status_obj["state"],
-    "finding_ids": finding_ids,
-}
-ledger["rounds"].append(new_round)
+def _zero_p1_streak(rs):
+    n = 0
+    for r in reversed(rs):
+        if r.get("p1_count", 0) == 0:
+            n += 1
+        else:
+            break
+    return n
 
-# Convergence detection: 0 P1 + ≤2 P2 for 2+ consecutive rounds.
-rounds = ledger["rounds"]
-consecutive_zero_p1 = 0
-for r in reversed(rounds):
-    if r.get("p1_count", 0) == 0:
-        consecutive_zero_p1 += 1
-    else:
-        break
 
-stop_rule_round = ledger.get("convergence", {}).get("stop_rule_met_at_round")
-last_two = rounds[-2:] if len(rounds) >= 2 else []
-stop_rule_met_now = (
-    len(last_two) == 2
-    and all(r.get("p1_count", 0) == 0 and r.get("p2_count", 0) <= 2 for r in last_two)
-)
-if stop_rule_met_now and not stop_rule_round:
-    stop_rule_round = round_number
+if review_counted:
+    round_number = len(ledger["rounds"]) + 1
+    new_round = {
+        "round": round_number,
+        "timestamp": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "review_file": os.path.basename(os.environ["WINGMAN_REVIEW_FILE"]),
+        "p1_count": p1_count,
+        "p2_count": p2_count,
+        "p3_count": p3_count,
+        "ci_status": ci_status_obj["state"],
+        "finding_ids": finding_ids,
+    }
+    ledger["rounds"].append(new_round)
 
-# Stagnation: same finding ID flagged in 2 consecutive rounds.
-stagnation_ids = []
-if len(rounds) >= 2:
-    prev_ids = set(rounds[-2].get("finding_ids") or [])
-    curr_ids = set(rounds[-1].get("finding_ids") or [])
-    stagnation_ids = sorted(prev_ids & curr_ids)
+    # Convergence detection: 0 P1 + ≤2 P2 for 2+ consecutive rounds.
+    rounds = ledger["rounds"]
+    consecutive_zero_p1 = _zero_p1_streak(rounds)
 
-# Trend: compare current p1+p2 to the previous round's.
-trend = "n/a"
-if len(rounds) >= 2:
-    prev_total = rounds[-2].get("p1_count", 0) + rounds[-2].get("p2_count", 0)
-    curr_total = p1_count + p2_count
-    if curr_total < prev_total:
+    stop_rule_round = ledger.get("convergence", {}).get("stop_rule_met_at_round")
+    last_two = rounds[-2:] if len(rounds) >= 2 else []
+    stop_rule_met_now = (
+        len(last_two) == 2
+        and all(r.get("p1_count", 0) == 0 and r.get("p2_count", 0) <= 2 for r in last_two)
+    )
+    if stop_rule_met_now and not stop_rule_round:
+        stop_rule_round = round_number
+
+    # Stagnation: same finding ID flagged in 2 consecutive rounds.
+    stagnation_ids = []
+    if len(rounds) >= 2:
+        prev_ids = set(rounds[-2].get("finding_ids") or [])
+        curr_ids = set(rounds[-1].get("finding_ids") or [])
+        stagnation_ids = sorted(prev_ids & curr_ids)
+
+    # Trend: compare current p1+p2 to the previous round's.
+    trend = "n/a"
+    if len(rounds) >= 2:
+        prev_total = rounds[-2].get("p1_count", 0) + rounds[-2].get("p2_count", 0)
+        curr_total = p1_count + p2_count
+        if curr_total < prev_total:
+            trend = "converging"
+        elif curr_total == prev_total:
+            trend = "flat"
+        else:
+            trend = "diverging"
+    elif p1_count + p2_count == 0:
         trend = "converging"
-    elif curr_total == prev_total:
-        trend = "flat"
-    else:
-        trend = "diverging"
-elif p1_count + p2_count == 0:
-    trend = "converging"
 
-ledger["convergence"] = {
-    "stop_rule_met_at_round": stop_rule_round,
-    "consecutive_zero_p1_rounds": consecutive_zero_p1,
-    "stagnation_detected": bool(stagnation_ids),
-    "stagnation_ids": stagnation_ids,
-    "trend": trend,
-}
+    ledger["convergence"] = {
+        "stop_rule_met_at_round": stop_rule_round,
+        "consecutive_zero_p1_rounds": consecutive_zero_p1,
+        "stagnation_detected": bool(stagnation_ids),
+        "stagnation_ids": stagnation_ids,
+        "trend": trend,
+    }
+else:
+    # A failed/missing run is NOT a round (v6). It is logged for visibility,
+    # but "rounds" and the ledger's convergence summary are left exactly as
+    # they were: the streak is neither reset nor advanced, the stop-rule
+    # cannot fire, and the next real round compares against the last real one.
+    ledger.setdefault("uncounted_runs", []).append({
+        "timestamp": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "review_file": os.path.basename(os.environ["WINGMAN_REVIEW_FILE"]),
+        "state": review_state,
+        "reason": review_reason,
+        "exit_status": reviewer_exit,
+    })
+    rounds = ledger["rounds"]
+    round_number = None
+    consecutive_zero_p1 = _zero_p1_streak(rounds)
+    stop_rule_met_now = False
+    stagnation_ids = []
+    trend = "n/a"
 
 with open(ledger_path, "w") as _lf:
     json.dump(ledger, _lf, indent=2)
@@ -583,6 +733,19 @@ if stagnation_ids:
         f"{', '.join(stagnation_ids)} flagged in 2 consecutive rounds. "
         "Fix isn't sticking; manual investigation needed."
     )
+if review_state == "missing":
+    notices.append(
+        f"[REVIEWER MISSING] No review ran ({review_reason}). This push is NOT "
+        "counted as a convergence round; the clean-round streak is unchanged. "
+        "Install the reviewer or set WINGMAN_REVIEWER, then push again."
+    )
+elif review_state == "failed":
+    notices.append(
+        f"[REVIEW FAILED] The reviewer did not complete ({review_reason}). This "
+        "push is NOT counted as a convergence round; the clean-round streak is "
+        "unchanged. See raw_review, fix the reviewer (e.g. `codex login`), and "
+        "push again."
+    )
 if (os.environ.get("WINGMAN_TOOL") or "") == "claude":
     notices.append(
         "[CROSS-MODEL NOTE] reviewer 'claude' may match the code author — "
@@ -602,8 +765,10 @@ if notices:
 prepended = ("\n".join(prepend_lines) + ("\n" if prepend_lines else "")) + raw
 
 status = "clean" if not prepended.strip() else "needs_categorization"
-if raw.startswith("WINGMAN_REVIEWER_MISSING"):
+if review_state == "missing":
     status = "reviewer_missing"
+elif review_state == "failed":
+    status = "review_failed"
 
 data = {
     "wingman_schema_version": "4",
@@ -619,9 +784,17 @@ data = {
         "session_id": _v("WINGMAN_SESSION_ID"),
         "wall_seconds": int(os.environ.get("WINGMAN_WALL_SECONDS", "0")),
     },
+    # v6: whether the reviewer actually ran. Only "succeeded" is a round.
+    "review_outcome": {
+        "state": review_state,
+        "reason": review_reason,
+        "exit_status": reviewer_exit,
+        "counted": review_counted,
+    },
     "ci_status": ci_status_obj,
     "convergence": {
         "round": round_number,
+        "counted": review_counted,
         "p1_count": p1_count,
         "p2_count": p2_count,
         "p3_count": p3_count,
