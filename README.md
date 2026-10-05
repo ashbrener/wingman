@@ -73,13 +73,35 @@ Wingman has **two things that version independently**:
 - **The plugin / skills** (Claude Code) — updated via `/plugin update wingman` when the plugin `version` is bumped. Community-marketplace installs pick this up automatically: the catalog re-pins on each release and syncs nightly.
 - **The `pre-push` hook** (installed in each repo) — updated by re-running setup. **Updating the plugin does _not_ touch an already-installed hook** — re-run `/wingman:review-setup` in the repo to upgrade it. (The `review-loop` skill also warns you when your hook is behind.)
 
-The Wingman block in your `pre-push` hook carries a `# wingman-hook-version: N` stamp (currently `4`). Re-running the installer — `/wingman:review-setup`, `bash scripts/install.sh`, or `npx skills add ashbrener/wingman` — compares the installed version against the version shipped in the pack:
+The Wingman block in your `pre-push` hook carries a `# wingman-hook-version: N` stamp (currently `6`). Re-running the installer — `/wingman:review-setup`, `bash scripts/install.sh`, or `npx skills add ashbrener/wingman` — compares the installed version against the version shipped in the pack:
 
 - **older installed** → strips the old block and appends the new one (in-place upgrade)
 - **same version** → skips, leaves the hook untouched
 - **`--force` / `--reinstall`** → unconditionally replaces the block (use this when you want to force a re-stamp without bumping the version, e.g. recovering from a hand-edited hook)
 
-This means bug fixes to the hook propagate the next time you re-run setup. Any older install — no stamp (treated as v1), v2, or v3 — is upgraded to v4 in place, leaving exactly one Wingman block and preserving your `.reviews/` data.
+This means bug fixes to the hook propagate the next time you re-run setup. Any older install — no stamp (treated as v1), or v2 through v5 — is upgraded to v6 in place, leaving exactly one Wingman block and preserving your `.reviews/` data.
+
+#### What's new in v6
+
+A review that did not run is no longer counted as a round. Before v6, a missing reviewer CLI or a reviewer that exited with an error — for example codex returning HTTP 401 because it isn't logged in — was recorded in `.reviews/_convergence.json` as a round with zero findings. That looks exactly like a clean round, so two such pushes met the stop-rule and printed a `[CONVERGENCE NOTICE]` on a branch nobody had reviewed.
+
+Now each push records whether its review actually ran, in a `review_outcome` object (`succeeded`, `failed` or `missing`, plus the reason and the reviewer's exit status):
+
+- **Only a succeeded review is a round.** Failed and missing runs go into the ledger's `uncounted_runs` list instead of `rounds`. They don't count toward the stop-rule, and they don't reset or advance the clean-round streak. A run that fails between two clean rounds leaves those two rounds consecutive.
+- **The artifact is still written.** It has `status: "review_failed"` or `"reviewer_missing"`, keeps the reviewer's output in `raw_review` so you can see the error, and adds a `[REVIEW FAILED]` or `[REVIEWER MISSING]` notice.
+
+The failure rule is the same for every reviewer (codex, gemini and claude). The first condition that matches decides:
+
+1. The reviewer CLI isn't on your PATH, or `WINGMAN_REVIEWER` names an unknown reviewer: `missing`.
+2. The reviewer exited with a non-zero status: `failed`.
+3. The reviewer produced no output: `failed`.
+4. One of the last 5 non-empty lines of output starts with an error signature for that reviewer, and the review reported no findings: `failed`. Examples are codex's `ERROR: unexpected status 401 Unauthorized`, claude's `Invalid API key · Please run /login`, and gemini's `Please set an Auth method`.
+
+Anything else counts as `succeeded`. When the rule is unsure it marks the run as failed, because an uncounted run only delays convergence by one push, while a false round can fake convergence. See [`specs/003-failed-review-not-a-round`](specs/003-failed-review-not-a-round/).
+
+#### What's new in v5
+
+The hook now parses findings when it writes the review file, instead of leaving `.reviews/*.json` with no machine-readable list. A new `parsed_findings` array holds what the reviewer reported (file, line, category, severity, priority and description), and the P1/P2/P3 counts come from that list. Before v5, codex's own output format counted as zero findings, so the stop-rule could fire on round one while real findings went unread. `findings` stays empty until `/review-loop` categorizes them. The artifact schema is now `"4"`, and `python3 scripts/migrate-reviews.py` backfills older files. See [`specs/002-emit-time-finding-parse`](specs/002-emit-time-finding-parse/).
 
 #### What's new in v4
 
@@ -105,7 +127,7 @@ The pre-push hook honors two optional environment variables. Both have sensible 
 | Var | Default | Effect |
 |---|---|---|
 | `WINGMAN_MODE` | `advisory` | Review INTENSITY, staged by project maturity: `off` (early — pre-users, iterating: skip review entirely), `advisory` (maturing — one round per PR, fix what's cheap, record the rest), `strict` (mature — round per push where artifacts propagate to other repos or paths are destructive). Resolution: this env var → a `.wingman-mode` repo file → `advisory`. **No mode blocks a merge or a push** — what blocks is your own lint/typecheck/test gate. |
-| `WINGMAN_REVIEWER` | `codex` | Which reviewer CLI runs: `codex`, `gemini`, or `claude`. Pick a **different model than the one that wrote the code** — that's where cross-model value comes from. Resolution: this env var → a `.wingman-reviewer` repo file → `codex`. A missing/unknown reviewer CLI writes a `reviewer_missing` record instead of blocking the push. (Choosing `claude` in a Claude-authored repo still runs, with a note suggesting a different model.) |
+| `WINGMAN_REVIEWER` | `codex` | Which reviewer CLI runs: `codex`, `gemini`, or `claude`. Pick a **different model than the one that wrote the code** — that's where cross-model value comes from. Resolution: this env var → a `.wingman-reviewer` repo file → `codex`. A missing/unknown reviewer CLI writes a `reviewer_missing` record instead of blocking the push, and that push never counts as a convergence round. (Choosing `claude` in a Claude-authored repo still runs, with a note suggesting a different model.) |
 | `WINGMAN_BASE` | `main` | Git base used for the review diff. Set to a feature-branch fix-commit SHA to review only the round-N delta — much faster than re-reviewing the whole branch each round. |
 | `WINGMAN_MODEL` | _(unset)_ — the reviewer CLI's own latest | Pin a specific model for the selected reviewer (e.g. `gpt-5.5`). Leave unset for always-latest behavior; each reviewer CLI picks whichever model it supports. |
 
@@ -131,13 +153,13 @@ git push                       # hook fires async behind you (redundant but harm
 
 This keeps the hook simple and lets sync vs async be an act-by-act choice rather than a global config knob.
 
-## Output schema (`wingman_schema_version: "3"`)
+## Output schema (`wingman_schema_version: "4"`)
 
 `.reviews/<timestamp>-<branch>.json` looks like:
 
 ```jsonc
 {
-  "wingman_schema_version": "3",
+  "wingman_schema_version": "4",
   "branch": "feature-x",
   "timestamp": "2026-04-27-104051",
   "base": "main",
@@ -150,6 +172,12 @@ This keeps the hook simple and lets sync vs async be an act-by-act choice rather
     "session_id": "019dce11-...",
     "wall_seconds": 87
   },
+  "review_outcome": {                       // hook v6 — did the reviewer actually run?
+    "state": "succeeded",                   // succeeded | failed | missing
+    "reason": null,                         // e.g. "reviewer exited with status 1"
+    "exit_status": 0,
+    "counted": true                         // only succeeded runs are convergence rounds
+  },
   "ci_status": {                            // v3 — gh pr checks snapshot
     "state": "FAILURE",
     "checks": [/* …gh pr checks output… */],
@@ -157,7 +185,8 @@ This keeps the hook simple and lets sync vs async be an act-by-act choice rather
     "failing": [{ "name": "quality-gate", "state": "FAILURE", "link": "…" }]
   },
   "convergence": {                          // v3 — round summary
-    "round": 8,
+    "round": 8,                             // null when the run was not counted
+    "counted": true,
     "p1_count": 0,
     "p2_count": 2,
     "p3_count": 0,
@@ -170,9 +199,10 @@ This keeps the hook simple and lets sync vs async be an act-by-act choice rather
   "synthetic_findings": ["[P1] CI status: …"],
   "notices": ["[CONVERGENCE NOTICE] …"],
   "raw_review": "...full codex output...",
+  "parsed_findings": [/* hook v5 — what the reviewer reported, parsed at emit time */],
   "findings": [],
   "resolutions": [],
-  "status": "needs_categorization"
+  "status": "needs_categorization"         // or clean | review_failed | reviewer_missing
 }
 ```
 
@@ -284,8 +314,8 @@ Every pull request runs [`.github/workflows/wingman-ci.yml`](.github/workflows/w
 | Job | What it does |
 |---|---|
 | `lint` | `shellcheck --severity=error` on `scripts/install.sh` and `assets/pre-push.sample` |
-| `syntax` | `bash -n` on both shell files; extracts the embedded Python heredoc from the hook and runs `py_compile` on it |
-| `install-smoke` | Runs the installer through six scenarios — fresh install, v1 → v3 upgrade, v2 → v3 upgrade, `--force` reinstall, exemption-file parsing, and `_convergence.json` ledger schema validation — asserting the hook ends up with exactly one Wingman block and the correct `# wingman-hook-version` stamp |
+| `syntax` | `bash -n` on both shell files; extracts the embedded Python heredoc from the hook and runs `py_compile` on it; runs `scripts/verify-parser.py` (finding parser against recorded fixtures) and `scripts/verify-convergence.py` (failed or missing reviews never count as convergence rounds) |
+| `install-smoke` | Runs the installer through its scenarios — fresh install, v1/v2/v3 → v6 upgrades, `--force` reinstall, exemption-file parsing, and `_convergence.json` ledger schema validation — asserting the hook ends up with exactly one Wingman block and the correct `# wingman-hook-version` stamp |
 
 CI runs on Linux. The installer itself is portable to macOS — PR #6 switched to a cross-platform `mktemp` invocation that works on both BSD (macOS) and GNU (Linux) coreutils, so the same `bash scripts/install.sh` flow is exercised in development on macOS and in CI on Linux.
 

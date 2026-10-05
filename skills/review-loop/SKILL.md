@@ -62,15 +62,15 @@ PRs. A deferral is an audit trail, not debt blocking the merge.
 
 <!-- CURRENT_HOOK_VERSION: keep in sync with the wingman-hook-version stamp in assets/pre-push.sample -->
 
-The current Wingman hook version is **5** (artifact schema 4). Before gathering findings, read the
+The current Wingman hook version is **6** (artifact schema 4). Before gathering findings, read the
 installed `pre-push` hook (the file containing the `# --- Wingman: Codex review`
 marker — check `git config core.hooksPath`, then `.git-hooks/`, `.githooks/`,
 `.husky/`, `.git/hooks/`) and find its `# wingman-hook-version: N` stamp.
 
-If `N` is missing or **less than 4**, surface a one-line, non-blocking notice
+If `N` is missing or **less than 6**, surface a one-line, non-blocking notice
 before continuing:
 
-> ⚠️ Your Wingman hook is v`N` (latest is v4). Run `/wingman:review-setup` to
+> ⚠️ Your Wingman hook is v`N` (latest is v6). Run `/wingman:review-setup` to
 > upgrade — it's in-place, keeps exactly one hook block, and preserves your
 > `.reviews/` data.
 
@@ -87,6 +87,16 @@ reported. On a pre-v4 artifact `parsed_findings` is absent or empty by
 construction: fall back to reading `raw_review` directly. The same applies to
 `convergence.p1_count` — before schema 4 those counts could read zero while
 findings existed, so never declare convergence from an old artifact's counts.
+
+**A review that did not run is not a review.** An artifact with
+`status: "review_failed"` or `"reviewer_missing"` (hook v6+, see
+`review_outcome`) records a reviewer that was not installed or exited with an
+error — for example a codex 401 because it is not logged in. Its empty findings
+mean *nothing was reviewed*, never *clean*. Don't categorize it; tell the user
+once what failed (the reason is in `review_outcome.reason`, the output in
+`raw_review`) and how to fix it (`codex login`, install the CLI). Such runs are
+logged in `_convergence.json` under `uncounted_runs` and never count toward the
+stop-rule.
 
 
 Check `.reviews/` for files with `"status": "needs_categorization"`.
