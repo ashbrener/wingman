@@ -35,7 +35,7 @@ Applied in order; the first that matches decides.
 | 1 | output starts with `WINGMAN_REVIEWER_MISSING` (CLI not on PATH, or unknown reviewer name) | `missing` | all |
 | 2 | exit status non-zero | `failed` | all |
 | 3 | output empty or whitespace only | `failed` | all |
-| 4 | a reviewer-specific error signature matches a line in the **last 15 non-empty lines**, AND the run reported **no findings** in either shape | `failed` | all, each with its own signatures |
+| 4 | a reviewer-specific error signature matches a line in the **last 5 non-empty lines**, AND the run reported **no findings** in either shape | `failed` | all, each with its own signatures |
 | 5 | otherwise | `succeeded` | all |
 
 Signatures (case-insensitive, anchored to the start of a line):
@@ -46,7 +46,7 @@ Signatures (case-insensitive, anchored to the start of a line):
   messages.
 - **claude** (`claude -p`) — `Invalid API key`, `Please run /login`,
   `API Error:`, `Credit balance is too low`, `Error:`, `not logged in`.
-- **gemini** — `Error`, `[API Error`, `Please set an Auth method`,
+- **gemini** — `Error:`, `[API Error`, `Error when talking to Gemini API`, `Please set an Auth method`,
   `API key not valid`, `GEMINI_API_KEY`, `Quota exceeded`, `not logged in`.
 
 - **Rationale for each guard**:

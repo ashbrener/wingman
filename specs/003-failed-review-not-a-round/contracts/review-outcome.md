@@ -14,7 +14,7 @@
 missing    if raw starts with "WINGMAN_REVIEWER_MISSING"
 failed     if WINGMAN_REVIEWER_EXIT is set and non-zero
 failed     if raw is empty or whitespace
-failed     if a signature for WINGMAN_TOOL matches a line among the last 15
+failed     if a signature for WINGMAN_TOOL matches a line among the last 5
            non-empty lines AND the run reported no findings in either shape
 succeeded  otherwise
 ```

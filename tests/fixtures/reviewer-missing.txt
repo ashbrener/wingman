@@ -1,0 +1,2 @@
+WINGMAN_REVIEWER_MISSING: reviewer 'codex' not found on PATH.
+Install it, or set WINGMAN_REVIEWER to one of: codex, gemini, claude.
