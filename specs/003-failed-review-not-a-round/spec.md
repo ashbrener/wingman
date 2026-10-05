@@ -16,6 +16,8 @@ When the reviewer cannot run — its CLI is not installed, the configured name i
 
 This is the same failure class as spec 002, one step earlier: **a signal that cannot fail is worse than none.** A missing reviewer must read as "no review happened", never as "the review was clean".
 
+A second instance of the same class was found by a further codex review of the installed hook (finding P2, the continuous-integration block). The hook asks the code host for the PR's check results. When any check is failing, the host's CLI prints the results correctly but exits with an error status. The hook treated that status as "no results" and replaced them with an empty list. CI was recorded as having no checks, the synthetic red-CI P1 finding was never added, and a branch with failing CI could report convergence. Red CI must read as red, never as "no CI".
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - A review that did not run never counts toward convergence (Priority: P1)
@@ -63,6 +65,22 @@ Reviews that run are untouched: findings still count, clean reviews still conver
 
 ---
 
+### User Story 4 - Failing CI is never read as "no CI" (Priority: P1)
+
+A PR has a failing check. The author pushes a clean review twice. Each artifact records CI as failing, names the failing check, carries the synthetic red-CI finding, and the stop-rule is not met.
+
+**Why this priority**: the same false-convergence outcome as US1, from the CI side: the one signal meant to stop convergence while CI is red was being discarded exactly when CI was red.
+
+**Independent Test**: run the hook's CI block against a stand-in for the host CLI that prints failing-check results and exits with an error status; feed the result through two clean reviews; verify CI reads failing, the synthetic P1 is present, and the stop-rule is not met.
+
+**Acceptance Scenarios**:
+
+1. **Given** check results reporting a failure, delivered with an error exit status, **When** the round is recorded, **Then** CI is recorded as failing, the synthetic P1 is present, and the stop-rule is not met.
+2. **Given** check results reporting a pending check, delivered with an error exit status, **When** the round is recorded, **Then** CI is recorded as pending.
+3. **Given** no usable results (no PR, the CLI missing, an error with no output, or output that is not valid results), **When** the round is recorded, **Then** CI falls back to unknown as before.
+
+---
+
 ### Edge Cases
 
 - The reviewer exits non-zero but printed a full review — failed: the exit status is the reviewer's own statement that it did not complete, and an uncounted run only delays convergence, while a false round can fake it.
@@ -87,6 +105,7 @@ Reviews that run are untouched: findings still count, clean reviews still conver
 - **FR-009**: Existing behaviours MUST be preserved: the hook never blocks a push, runs in the background, and treats successful reviews exactly as before.
 - **FR-010**: The installed-copy version marker MUST be raised so existing installations upgrade through the normal setup path, and the documentation MUST state the current version.
 - **FR-011**: No new dependency may be introduced.
+- **FR-012**: The CI block MUST capture the check results and the CLI's exit status separately, and MUST use the results whenever they are valid, whatever the exit status, including failing and pending checks. It MUST fall back to "unknown" only when there are no usable results: no PR, the CLI missing, empty output, or output that does not parse.
 
 ### Key Entities
 
@@ -103,6 +122,7 @@ Reviews that run are untouched: findings still count, clean reviews still conver
 - **SC-003**: Clean → failed → clean yields exactly two rounds and the stop-rule met on round 2.
 - **SC-004**: Two genuinely clean reviews still meet the stop-rule on round 2; a review with findings still does not.
 - **SC-005**: Every failed or missing artifact states its outcome and reason and retains the raw reviewer output.
+- **SC-006**: With a failing check reported alongside an error exit status, two clean reviews record CI as failing, carry the synthetic P1, and do not meet the stop-rule, where the previous version recorded no CI and met it.
 
 ## Assumptions
 

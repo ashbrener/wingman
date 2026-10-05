@@ -12,7 +12,9 @@ reviewer's exit status instead of discarding it with `|| true`; the payload
 writer classifies the run with one documented per-reviewer rule; failed and
 missing runs are written as artifacts (marked, raw output kept) and logged in
 the ledger as `uncounted_runs`, outside `rounds`, so the stop-rule, streak,
-stagnation and trend arithmetic never sees them. Decisions in
+stagnation and trend arithmetic never sees them. The CI block likewise stops
+discarding `gh pr checks` output on a non-zero exit, which gh uses to mean
+"a check failed", so red CI reaches the writer as red. Decisions in
 [research.md](research.md) (R-1 … R-7).
 
 ## Technical Context
@@ -60,8 +62,11 @@ assets/pre-push.sample            # the ONLY behavioural change:
                                   #   + _classify_review() + signatures
                                   #   + uncounted runs kept out of rounds
                                   #   + review_outcome, status review_failed
+                                  #   + CI block: output and exit captured
+                                  #     separately; JSON used whenever it parses
                                   #   + marker → wingman-hook-version: 6
-scripts/verify-convergence.py     # NEW — drives the payload writer
+scripts/verify-convergence.py     # NEW — drives the payload writer, and the
+                                  #   CI block against a fake gh
 tests/fixtures/
 ├── codex-401.txt                 # a codex run that failed authentication
 └── reviewer-missing.txt          # the hook's missing-reviewer sentinel
@@ -84,3 +89,7 @@ skills/review-loop/SKILL.md       # version 6; review_failed is not a clean roun
   `reviewer_missing`, and an explanatory notice.
 - **D5** (R-6): hook marker 5 → 6; schema stays 4.
 - **D6** (R-7): `scripts/verify-convergence.py` + fixtures, wired into CI.
+- **D7** (R-6a): CI block captures `gh pr checks` output and exit status
+  separately; valid JSON is used regardless of exit status (1 = failing,
+  8 = pending); fall back to `UNKNOWN` (with `gh_exit`) only on empty or
+  unparseable output. Hook stays at 6.

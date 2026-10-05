@@ -104,6 +104,24 @@ Signatures (case-insensitive, anchored to the start of a line):
   fields that a reader can already treat as "unknown" when absent, and would
   interact with `migrate-reviews.py`'s backfill, which rewrites schema 2–4 files.
 
+## R-6a: CI results are used whenever they parse
+
+- **Defect**: `gh pr checks … > file || echo '{"state":"UNKNOWN",…}' > file`.
+  `gh pr checks` exits **1 when any check fails** and **8 when any is
+  pending**, while still printing valid JSON. The `||` fallback therefore
+  overwrote the red-CI JSON with an empty list exactly when CI was red. The
+  writer saw no checks, recorded `NONE`, added no synthetic P1, and two clean
+  reviews met the stop-rule on a red branch.
+- **Decision**: capture stdout (`_ci_raw`) and the exit status (`_ci_rc`)
+  separately. If the output is non-empty and parses as JSON, write it as is,
+  whatever the exit status. Otherwise write
+  `{"state":"UNKNOWN","checks":[],"gh_exit":N}`. "No PR" and "gh missing" keep
+  the existing `NONE` default because the block never calls `gh pr checks`.
+- **Rationale**: the exit status of `gh pr checks` reports the checks' state,
+  not whether the command worked. The output is the source of truth, and
+  validity of the output is the only fallback condition. Validation uses
+  `python3 -c json.load`, which the hook already requires, so no new dependency.
+
 ## R-7: How it is verified
 
 - **Decision**: `scripts/verify-convergence.py` + fixtures under
@@ -112,6 +130,12 @@ Signatures (case-insensitive, anchored to the start of a line):
   appear exactly once), runs it as the hook does — same env vars, a scratch
   `.reviews/` — across sequences of pushes, and asserts the ledger and the
   artifacts. Wired into CI next to the parser verifier.
+- The CI block is bash, so the verifier also slices it from the hook, between
+  its unique `# --- v3 Feature 2: CI awareness` and
+  `# --- Reviewer metadata extraction` headers, and runs it with a fake `gh` on
+  `PATH`. The fake prints the check results and exits 1 (failing), 8 (pending),
+  0 (green), or 1 with no output or with non-JSON output. Its output is then
+  fed through the payload writer.
 - **Rationale**: convergence is ledger arithmetic across several runs, so it
   must be exercised end to end, not by unit-testing a slice. Extraction keeps
   the code single-sourced in the hook.

@@ -64,6 +64,20 @@ or excluding without classifying, is half a fix).
   6; `review_failed` / `reviewer_missing` artifacts are not reviews — say so,
   never treat them as clean.
 
+## Phase 4b: US4 — failing CI is never read as "no CI" (P1)
+
+- [X] T015 [US4] Extend `scripts/verify-convergence.py`: slice the CI block
+  from the hook between its unique headers, run it with a fake `gh` that
+  prints failing-check JSON and exits 1 (plus pending/exit 8, green/exit 0,
+  no output/exit 1, garbage/exit 1), and feed the result through two clean
+  reviews. It must FAIL against the `|| fallback` block (CI recorded as NONE,
+  no synthetic P1, stop-rule met) — that failure is the red test.
+- [X] T016 [US4] In `assets/pre-push.sample`, capture `gh pr checks` output in
+  `_ci_raw` and its exit status in `_ci_rc`; write the output whenever it is
+  non-empty valid JSON; otherwise write `UNKNOWN` with `gh_exit`.
+- [X] T017 Add the CI fix to the v6 History entry (marker stays 6) and to the
+  README's "What's new in v6".
+
 ## Phase 5: Verification
 
 - [X] T013 `bash -n` and `shellcheck --severity=error` on the hook; `py_compile`
