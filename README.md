@@ -97,7 +97,11 @@ The failure rule is the same for every reviewer (codex, gemini and claude). The 
 3. The reviewer produced no output: `failed`.
 4. One of the last 5 non-empty lines of output starts with an error signature for that reviewer, and the review reported no findings: `failed`. Examples are codex's `ERROR: unexpected status 401 Unauthorized`, claude's `Invalid API key · Please run /login`, and gemini's `Please set an Auth method`.
 
-Anything else counts as `succeeded`. When the rule is unsure it marks the run as failed, because an uncounted run only delays convergence by one push, while a false round can fake convergence. See [`specs/003-failed-review-not-a-round`](specs/003-failed-review-not-a-round/).
+Anything else counts as `succeeded`. When the rule is unsure it marks the run as failed, because an uncounted run only delays convergence by one push, while a false round can fake convergence.
+
+v6 also fixes red CI being recorded as "no CI". `gh pr checks` prints valid JSON but exits with status 1 when a check fails, and 8 when one is pending. The hook treated that exit status as an error and replaced the JSON with an empty list. The review then recorded CI as `NONE`, left out the synthetic red-CI P1, and could report convergence while CI was failing. The hook now captures the output and the exit status separately and uses the JSON whenever it parses. It falls back to `UNKNOWN` only when there's no usable output.
+
+See [`specs/003-failed-review-not-a-round`](specs/003-failed-review-not-a-round/).
 
 #### What's new in v5
 

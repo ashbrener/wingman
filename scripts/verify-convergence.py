@@ -12,6 +12,12 @@ a scratch ``.reviews/``), across push sequences built from recorded fixtures.
 The writer is SINGLE-SOURCED in the hook: it is extracted between its heredoc
 delimiters, each asserted to appear exactly once, never copied.
 
+It also runs the hook's CI-awareness block in bash against a fake ``gh``:
+``gh pr checks`` prints valid JSON but EXITS 1 when any check fails (8 when
+any is pending), and the hook used to replace that JSON with an empty list on
+the non-zero exit — recording CI as NONE, dropping the synthetic red-CI P1,
+and letting a branch with failing CI converge.
+
 Run: ``python3 scripts/verify-convergence.py``  ·  exit 0 = green, 1 = mismatch.
 """
 
@@ -31,6 +37,9 @@ FIXTURES = REPO / "tests" / "fixtures"
 OPEN = "python3 - <<'WINGMAN_PYEOF'"
 CLOSE = "\nWINGMAN_PYEOF\n"
 
+CI_OPEN = "        # --- v3 Feature 2: CI awareness"
+CI_CLOSE = "        # --- Reviewer metadata extraction"
+
 CLEAN = (FIXTURES / "no-findings.txt").read_text()
 FINDINGS = (FIXTURES / "incident-native.txt").read_text()
 CODEX_401 = (FIXTURES / "codex-401.txt").read_text()
@@ -49,6 +58,53 @@ def load_writer() -> str:
     return text.split(OPEN, 1)[1].split(CLOSE, 1)[0].lstrip("\n")
 
 
+def load_ci_block() -> str:
+    """The hook's CI-awareness bash block, sliced between its unique headers."""
+    text = HOOK.read_text()
+    for delim in (CI_OPEN, CI_CLOSE):
+        count = text.count(delim)
+        if count != 1:
+            raise SystemExit(f"FAIL: {delim.strip()!r} appears {count} times in {HOOK} — expected exactly 1.")
+    return CI_OPEN + text.split(CI_OPEN, 1)[1].split(CI_CLOSE, 1)[0]
+
+
+FAKE_GH = """#!/bin/bash
+# A stand-in for gh: `pr list` names PR 20; `pr checks` prints $FAKE_GH_CHECKS
+# (if set) and exits $FAKE_GH_EXIT — real gh exits 1 on failing checks, 8 on
+# pending, while still printing the JSON.
+case "$1 $2" in
+    "pr list") echo 20 ;;
+    "pr checks") [ -n "${FAKE_GH_CHECKS:-}" ] && printf '%s\\n' "$FAKE_GH_CHECKS"; exit "${FAKE_GH_EXIT:-0}" ;;
+esac
+"""
+
+
+def run_ci_block(checks: str | None, gh_exit: int) -> str:
+    """Run the hook's CI block with a fake gh; return what it wrote for the writer."""
+    d = pathlib.Path(tempfile.mkdtemp(prefix="wingman-ci-"))
+    (d / "bin").mkdir()
+    gh = d / "bin" / "gh"
+    gh.write_text(FAKE_GH)
+    gh.chmod(0o755)
+    script = d / "ci.sh"
+    script.write_text(
+        '_ci_status_file="$1"; _ci_summary_file="$2"; WINGMAN_BRANCH=feat/x\n'
+        + load_ci_block()
+    )
+    env = dict(os.environ)
+    env["PATH"] = f"{d / 'bin'}:{env.get('PATH', '')}"
+    env["FAKE_GH_EXIT"] = str(gh_exit)
+    if checks is not None:
+        env["FAKE_GH_CHECKS"] = checks
+    proc = subprocess.run(
+        ["bash", str(script), str(d / "ci.json"), str(d / "cisum.txt")],
+        env=env, capture_output=True, text=True, check=False,
+    )
+    if proc.returncode != 0:
+        raise SystemExit(f"FAIL: CI block crashed:\n{proc.stderr}")
+    return (d / "ci.json").read_text()
+
+
 class Repo:
     """A scratch working directory standing in for one branch's pushes."""
 
@@ -60,9 +116,11 @@ class Repo:
         (self.dir / "ci.json").write_text("[]")
         self.n = 0
 
-    def push(self, raw: str, tool: str = "codex", exit_status: int | None = 0) -> dict:
+    def push(self, raw: str, tool: str = "codex", exit_status: int | None = 0,
+             ci: str = "[]") -> dict:
         """Run the writer once, as one push; return the artifact it wrote."""
         self.n += 1
+        (self.dir / "ci.json").write_text(ci)
         review_in = self.dir / f"review-{self.n}.txt"
         review_in.write_text(raw)
         artifact = self.dir / ".reviews" / f"2026-10-05-00000{self.n}-feat-x.json"
@@ -231,6 +289,49 @@ def main() -> int:
     a = r.push("Please set an Auth method in your settings.json or specify GEMINI_API_KEY\n",
                tool="gemini", exit_status=0)
     ok &= check("classified failed", outcome(a) == "failed", a.get("review_outcome"))
+
+    # gh pr checks exits 1 on failing checks while printing valid JSON. That
+    # JSON must reach the writer: CI red is a synthetic P1, so a branch with
+    # failing CI can never converge.
+    failing = json.dumps([
+        {"name": "quality-gate", "state": "FAILURE", "link": "https://ci.example/1"},
+        {"name": "lint", "state": "SUCCESS", "link": "https://ci.example/2"},
+    ])
+    print("gh pr checks: failing checks, exit 1")
+    ci = run_ci_block(failing, 1)
+    r = Repo(writer)
+    r.push(CLEAN, ci=ci)
+    a = r.push(CLEAN, ci=ci)
+    ok &= check("CI recorded as FAILURE", a["ci_status"]["state"] == "FAILURE", a["ci_status"])
+    ok &= check("failing check named", [f["name"] for f in a["ci_status"]["failing"]] == ["quality-gate"],
+                a["ci_status"]["failing"])
+    ok &= check("synthetic red-CI P1 present",
+                any(f.startswith("[P1] CI status: quality-gate") for f in a["synthetic_findings"]),
+                a["synthetic_findings"])
+    ok &= check("p1_count includes the red CI", a["convergence"]["p1_count"] == 1, a["convergence"])
+    ok &= check("stop-rule not met", not a["convergence"]["stop_rule_met"], a["convergence"])
+    ok &= check("no convergence notice", not converged(a), a["notices"])
+
+    print("gh pr checks: pending checks, exit 8")
+    ci = run_ci_block(json.dumps([{"name": "tests", "state": "PENDING", "link": ""}]), 8)
+    a = Repo(writer).push(CLEAN, ci=ci)
+    ok &= check("CI recorded as PENDING", a["ci_status"]["state"] == "PENDING", a["ci_status"])
+
+    print("gh pr checks: all green, exit 0")
+    ci = run_ci_block(json.dumps([{"name": "tests", "state": "SUCCESS", "link": ""}]), 0)
+    a = Repo(writer).push(CLEAN, ci=ci)
+    ok &= check("CI recorded as SUCCESS", a["ci_status"]["state"] == "SUCCESS", a["ci_status"])
+    ok &= check("no synthetic finding", a["synthetic_findings"] == [], a["synthetic_findings"])
+
+    print("gh pr checks: no usable output (error, or unparseable)")
+    for label, out, rc in (("no output, exit 1", None, 1), ("garbage, exit 1", "HTTP 502 Bad Gateway", 1)):
+        ci = run_ci_block(out, rc)
+        try:
+            parsed = json.loads(ci)
+        except json.JSONDecodeError:
+            parsed = None
+        ok &= check(f"{label}: falls back to UNKNOWN",
+                    isinstance(parsed, dict) and parsed.get("state") == "UNKNOWN", ci)
 
     print("exit status not passed (older caller)")
     r = Repo(writer)

@@ -40,7 +40,13 @@
 #        and missing runs are logged under "uncounted_runs" and never touch
 #        "rounds", the stop-rule or the clean streak. Their artifacts are
 #        still written, marked review_failed / reviewer_missing, raw output
-#        kept. See specs/003-failed-review-not-a-round.
+#        kept. Also: `gh pr checks` prints valid JSON but exits 1 when a
+#        check fails (8 when pending), and the `|| fallback` replaced that
+#        JSON with an empty list — CI recorded as NONE, no synthetic red-CI
+#        P1, and a branch with failing CI could converge. Output and exit
+#        status are now captured separately; the JSON is used whenever it
+#        parses, with UNKNOWN only when there is no usable output.
+#        See specs/003-failed-review-not-a-round.
 #   v5 (schema 4) — parse findings at EMIT time into "parsed_findings", and
 #        derive p1/p2/p3 from that parse max'd with the legacy grep. v4 made
 #        the reviewer pluggable and codex kept its NATIVE pipe-shaped output,
@@ -86,7 +92,7 @@ if [[ "$WINGMAN_BRANCH" != "main" && "$WINGMAN_BRANCH" != "master" && "$WINGMAN_
 
     _wingman_run() {
         local _start _end _wall _review_file _exemptions_text _prompt_file _full_prompt_file
-        local _ci_status_file _ci_summary_file _pr_number _reviewer_exit
+        local _ci_status_file _ci_summary_file _pr_number _reviewer_exit _ci_raw _ci_rc
         # The reviewer's exit status (v6). Empty when the CLI never ran
         # (missing/unknown reviewer). It is the primary signal that a review
         # FAILED — a failed run must never be counted as a convergence round.
@@ -277,8 +283,21 @@ WINGMAN_EXEMPT_EOF
         if command -v gh >/dev/null 2>&1; then
             _pr_number=$(gh pr list --head "$WINGMAN_BRANCH" --json number --jq '.[0].number' 2>/dev/null || true)
             if [ -n "$_pr_number" ]; then
-                gh pr checks "$_pr_number" --json name,state,link --jq '.' \
-                    > "$_ci_status_file" 2>/dev/null || echo '{"state":"UNKNOWN","checks":[]}' > "$_ci_status_file"
+                # Output and exit status are captured SEPARATELY (v6): gh pr
+                # checks prints valid JSON but exits 1 when any check FAILS (8
+                # when any is pending). An `|| fallback` on the exit status
+                # threw away exactly the red-CI JSON this block exists for, so
+                # CI read NONE, the synthetic red-CI P1 vanished, and a branch
+                # with failing CI could converge. Use the JSON whenever it
+                # parses; fall back only when there is no usable output.
+                _ci_rc=0
+                _ci_raw=$(gh pr checks "$_pr_number" --json name,state,link --jq '.' 2>/dev/null) || _ci_rc=$?
+                if [ -n "$_ci_raw" ] \
+                    && printf '%s' "$_ci_raw" | python3 -c 'import json, sys; json.load(sys.stdin)' >/dev/null 2>&1; then
+                    printf '%s\n' "$_ci_raw" > "$_ci_status_file"
+                else
+                    echo "{\"state\":\"UNKNOWN\",\"checks\":[],\"gh_exit\":${_ci_rc}}" > "$_ci_status_file"
+                fi
             fi
         fi
 
